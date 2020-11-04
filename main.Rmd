@@ -1,0 +1,95 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Libraries and settings:
+```{r, echo=FALSE}
+options(scipen=999)
+library(ggplot2)
+library(lubridate)
+library(caret)
+```
+
+
+# Load and explore
+
+## Load
+
+```{r}
+original <- read.csv('train.csv')
+submissi <- read.csv('test.csv')
+```
+
+
+## Explore
+
+```{r}
+head(original)
+str(original)
+
+hist(original$SalePrice)
+hist(log10(original$SalePrice), breaks=15)
+```
+The bulk of the prices iw between $100,000 and $200,000, but it is a skewed distribution with some (few) houses that cost up to $800,000.
+If we do a hist of log10 price, it looks more bell-shaped, with the mean around 5.2 (correponds to $1xx,000).
+
+```{r}
+NAcols <- sapply(original, function(x) sum(is.na(x)))
+sort(NAcols[NAcols != 0], decreasing=TRUE)
+
+NArows <- apply(original, 1, function(x) sum(is.na(x)))
+```
+There are 19 columns with some NA values.
+For a total of 1460 rows in the data set:
+
+1. PoolQC, MiscFeature, Alley and Fence have over a 1000 each, that is, over 2/3 are missing
+2. FireplaceQu misses 690, almost 1/2
+3. The rest miss much less and can probably be imputed
+
+## Feature Engineering
+
+```{r}
+# convert year and month sold to date
+data <- original
+data$DateSold <- ymd(paste(data$YrSold,data$MoSold,'01'))
+data$YrSold <- NULL
+data$MoSold <- NULL
+g <- ggplot(data=data, aes(x=LotArea, y=SalePrice)) + geom_point()
+```
+
+
+# Build model
+
+```{r}
+rmse <- function(x,y) {
+        sqrt(mean( (log(x)-log(y))^2 ))
+}
+```
+
+
+Silly linear regression after dropping all columns that have NAs
+
+```{r}
+NAcol_names <- names(NAcols[NAcols != 0])
+data_noNA <- original
+data_noNA[,NAcol_names] <- NULL
+
+fit_linear <- train(SalePrice ~ ., data=data_noNA, method='lm')
+
+submi_noNA <- submissi
+submi_noNA[,NAcol_names] <- NULL
+
+p_train <- predict(fit_linear, data_noNA[,-62])
+p_submi <- predict(fit_linear, submi_noNA)
+
+rmse(p_train,data_noNA[,62])
+
+```
+
+# Output results
+
+```{r}
+submit <- cbind(submissi[,1], p_submi)
+```
+
