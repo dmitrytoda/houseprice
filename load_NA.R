@@ -13,18 +13,26 @@ rmse <- function(x,y) {
         sqrt(mean( (log(x)-log(y))^2 ))
 }
 
-# LotFrontage, MasVnrArea                               : factor -> int
-orig_train$LotFrontage <- as.integer(orig_train$LotFrontage)
-orig_train$MasVnrArea <- as.integer(orig_train$MasVnrArea)
-orig_submi$LotFrontage <- as.integer(orig_submi$LotFrontage)
-orig_submi$MasVnrArea <- as.integer(orig_submi$MasVnrArea)
+# LotFrontage, MasVnrArea, GarageYrBlt     : factor -> int
+# Need to do this only if loading with na.strings=''
+# orig_train$LotFrontage <- as.integer(as.character(orig_train$LotFrontage))
+# orig_train$MasVnrArea <- as.integer(as.character(orig_train$MasVnrArea))
+# orig_train$GarageYrBlt <- as.integer(as.character(orig_train$GarageYrBlt))
+# 
+# orig_submi$LotFrontage <- as.integer(as.character(orig_submi$LotFrontage))
+# orig_submi$MasVnrArea <- as.integer(as.character(orig_submi$MasVnrArea))
+# orig_submi$GarageYrBlt <- as.integer(as.character(orig_submi$GarageYrBlt))
 
-# GarageYrBlt, MoSold, YrSold, YearBuilt, YearRemodAdd  : int -> date
 
-num_predictors <- colnames(select_if(orig_train, is.numeric))
-fact_predictors <- colnames(orig_train)
-fact_predictors <- fact_predictors[!fact_predictors %in% num_predictors]
-num_predictors <- num_predictors[!num_predictors %in% c('Id','SalePrice')]
+
+# MoSold, YrSold, YearBuilt, YearRemodAdd  : int -> date
+
+# num_predictors <- colnames(select_if(orig_train, is.numeric))
+# fact_predictors <- colnames(orig_train)
+# fact_predictors <- fact_predictors[!fact_predictors %in% num_predictors]
+# num_predictors <- num_predictors[!num_predictors %in% c('Id','SalePrice')]
+
+############################################################
 
 ## Dealing with NA values
 ## Many columns have 'NA' values, some of them are missing but some are legit levels (no alley access, no garage etc)
@@ -91,4 +99,9 @@ orig_submi$MasVnrType <- sapply(orig_submi$MasVnrType,function(x) if_else(is.na(
 # MSZoning, Functional, Exterior1st, Exterior2nd, KitchenQual, SaleType : need to impute
 # As zeroth approximation, let's fill them with the most frequent values
 orig_submi$MSZoning <- sapply(orig_submi$MSZoning,function(x) if_else(is.na(x),'RL',as.character(x)))
+orig_submi$Exterior1st <- sapply(orig_submi$Exterior1st,function(x) if_else(is.na(x),'VinylSd',as.character(x)))
+orig_submi$Exterior2nd <- sapply(orig_submi$Exterior2nd,function(x) if_else(is.na(x),'VinylSd',as.character(x)))
+orig_submi$KitchenQual <- sapply(orig_submi$KitchenQual,function(x) if_else(is.na(x),'TA',as.character(x)))
+orig_submi$Functional <- sapply(orig_submi$Functional,function(x) if_else(is.na(x),'Typ',as.character(x)))
+orig_submi$SaleType <- sapply(orig_submi$SaleType,function(x) if_else(is.na(x),'WD',as.character(x)))
 

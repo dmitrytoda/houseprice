@@ -31,6 +31,8 @@ rmse(pLR_test_B1, testing[,81])
 
 # Predict on submission set and create submission file
 pLR_submi <- predict(fitLR, orig_submi)
+pLR_submi <- predict(fitLR_B1, submiB1)
+
 submit <- cbind(orig_submi$Id, pLR_submi)
 colnames(submit) <- c("Id", 'SalePrice')
-write.csv(submit, 'Nov 1.csv', row.names = FALSE)
+write.csv(submit, 'Nov4_silly_LR.csv', row.names = FALSE)
