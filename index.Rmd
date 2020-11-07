@@ -1,0 +1,598 @@
+---
+title: "House prices"
+author: 'Dmitry Dolgov'
+output: 
+        html_document:
+                number_sections: true
+                toc: true
+                toc_depth: 3
+        
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Executive summary
+
+# Loading and exploring
+
+## Load libraries and data
+
+```{r message=FALSE}
+options(scipen=999)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(psych)  
+library(scales)
+library(corrplot)
+library(ggrepel)
+library(plyr)
+library(DMwR)
+set.seed(1101)
+```
+```{r}
+train <- read.csv('train.csv', stringsAsFactors = FALSE)
+test <- read.csv('test.csv', stringsAsFactors = FALSE)
+```
+
+## Data overview
+
+- There are character and numeric features
+- Character are mostly factors but reading them as char first to facilitate clean-up / feature engineering
+- total of 80 predictors + 1 response variable SalePrice
+
+```{r}
+dim(train)
+str(train[,c(1:10,81)])
+```
+
+Do not need the IDs for prediction, but do need them for submission, therefore store test IDs separately and remove them from data sets.
+
+```{r}
+test_Ids <- test$Id
+train$Id <- NULL
+test$Id <- NULL
+```
+
+Add NA SalePrice to test set and then stack it vertically with the train set. <span style="color: red;">This is a questionable practice as it may lead to data leakage from the test set (namely, feature distribution parameters).</span> But it is very convenient to do all the data transformations together on a single data set, and for competition purpose, since we know the test set distribution already, it is fair game to use it. We'll probably end up overfitting to the test set, but have a higher leader board score in the end.
+
+```{r}
+test$SalePrice <- NA
+all <- rbind (train, test)
+dim(all)
+```
+We're left with one data set of 79 predictors and 1 response variable.
+
+## SalePrice
+
+The plot below shows that SalePrice is positively skewed (has a long right tail, or in other words, median is lower than mean). This is to be expected as there will always be a small number of very expensive houses. Most prediction models work best for normally distributed variables, this can be fixed by applying a log transformation before prediction.
+
+```{r}
+ggplot(data=all[!is.na(all$SalePrice),], aes(SalePrice)) +
+        geom_histogram(aes(y=..density..), fill="steelblue", binwidth = 15000) +
+        geom_density(size=1) +
+        geom_vline(aes(xintercept=mean(SalePrice)), col='red', linetype='dashed') +
+        geom_text(aes(x=mean(SalePrice), y=.000001), label='\nMean', angle=90) +
+        geom_vline(aes(xintercept=median(SalePrice)), col='green', linetype='dashed') +
+        geom_text(aes(x=median(SalePrice)-18000, y=.000001), label='Median', angle=90) +
+        scale_x_continuous(breaks= seq(0, 800000, by=100000), labels=comma)
+                       
+```
+
+## Numeric predictors
+
+Let's leave the character/factor predictors aside for now, and understand the numeric ones.
+
+### Overview
+
+```{r}
+numericPredictors <- which(sapply(all, is.numeric))
+numericPredNames <- names(numericPredictors)
+cat('There are', length(numericPredNames), 'numeric predictors')
+```
+
+Here I calculate pairwise correlations of all the features (including SalePrice), leave only those with |corr| > .5 and plot them sorted in descending order. Note that <span style="color: red;">because of NA values I need to use pairwise.complete.obs</span> which can give misleading results by comparing different pairs of vectors in each case, but here I'm just trying to find the most important features for further analysis.
+
+```{r}
+all_numPred <- all[,numericPredictors]
+cor_matrix <- cor(all_numPred, use="pairwise.complete.obs")
+cor_sorted <- sort(cor_matrix[,'SalePrice'], decreasing=TRUE)
+cor_high <- names(which(sapply(cor_sorted, function(x) abs(x)>.5)))
+cor_matrix <- cor_matrix[cor_high, cor_high]
+corrplot.mixed(cor_matrix, tl.col='black', tl.pos='lt')
+```
+There are 10 predictors highly correlated with SalePrice. Some of them are also highly correlated with each other, e.g. GarageCars - GarageArea, TotalBsmtSF - X1stFlrSF etc. I will have to deal with them later by removing some.
+
+### Overall Quality
+
+OverallQual has the highest correlation with SalePrice among all features (.79). It ranges from 1 (very poor) to 10 (very excellent). While it is a numeric feature, it only comes at discrete natural values, so it makes sense to plot the distribution for each quality as a boxplot.
+
+There is an obious upward trend (visually stronger than just linear, maybe cuadratic or exponential). Quite a few outliers with the most extreme ones at levels 4 and 10.
+
+```{r}
+ggplot(data = all[!is.na(all$SalePrice),], aes(x=factor(OverallQual), y=SalePrice)) +
+        geom_boxplot(color='steelblue', 
+                     outlier.color = 'black', outlier.shape = 1) +
+        labs(x='Overall Quality') + 
+        scale_y_continuous(breaks= seq(0, 800000, by=100000), labels = comma) +
+        geom_text_repel(aes(label=ifelse(all[!is.na(all$SalePrice),'SalePrice']>650000 | all[!is.na(all$SalePrice),'SalePrice']>200000 & all[!is.na(all$SalePrice),'OverallQual']==4,rownames(all),'')), col=2)
+```
+
+### Living area
+
+GrLivArea is "Above grade (ground) living area square feet" and the second most correlated with SalePrice feature. This one is truly continuous so a scatter plot makes sense. There are two big time outliers that I may need to deal with later.
+
+```{r}
+ggplot(data=all[!is.na(all$SalePrice),], aes(x=GrLivArea, y=SalePrice)) +
+        geom_point(col='steelblue', alpha=.5) +
+        geom_smooth(method='lm') +
+        labs(x='Living Area') + 
+        scale_y_continuous(breaks= seq(0, 800000, by=100000), labels = comma) +
+        geom_text_repel(aes(label=ifelse(all[!is.na(all$SalePrice),'GrLivArea']>4500,rownames(all),'')), col=2)
+```
+
+### Garage Capacity
+
+The third strongly correlated with SalePrice predictor is GarageCars (Size of garage in car capacity). This will be the last one I plot in this section.
+
+```{r}
+ggplot(data = all[!is.na(all$SalePrice),], aes(x=factor(GarageCars), y=SalePrice)) +
+        geom_boxplot(color='steelblue', 
+                     outlier.color = 'black', outlier.shape = 1) +
+        labs(x='Garage Capacity') + 
+        scale_y_continuous(breaks= seq(0, 800000, by=100000), labels = comma) +
+        geom_text_repel(aes(label=ifelse(all[!is.na(all$SalePrice),'SalePrice']>650000,rownames(all),'')), col=2)
+```
+
+# Missing data and factor predictors
+
+These are all the columns with NA data, sorted by the number of NAs. Some of these features forms groups (Pool, Garage etc). I will deal with NAs group by group, going top to bottom. As I go, I will convert character features to either integers (where they are obviously ordered) or to factors otherwise.
+
+```{r}
+NA_cols <- sapply(all[,-80], function(x) sum(is.na(x)))
+sort(NA_cols[NA_cols != 0], decreasing=TRUE)
+```
+
+## Fix NA {.tabset}
+
+### Pool
+
+**Fix NA**
+
+PoolQC has most NAs at 2909 total. However, according to data description:
+
+PoolQC: Pool quality
+		
+       Ex	Excellent
+       Gd	Good
+       TA	Average/Typical
+       Fa	Fair
+       NA	No Pool
+
+NA here simply means no pool. Not cool, data set creator, not cool! using NA to represent an actual known value.
+
+```{r}
+all[is.na(all$PoolQC),'PoolQC'] <- 'None'
+```
+
+**Check for inconsistencies**
+
+There is a second pool variable, PoolArea. The weird thing about it is that there are 3 houses that have pool area specified, but according to PoolQC they do not have a pool! I'm listing here OverallQual and YearBuilt as they are also indicators of quality.
+
+```{r}
+all[all$PoolQC=='None' & all$PoolArea!=0,c('PoolQC', 'PoolArea', 'OverallQual', 'YearBuilt')]
+```
+
+I assume this is a data entry error: these 3 houses do have a pool but it's quality is unknown so let's impute it based on OverallQual and YearBuilt.
+
+```{r}
+all[all$PoolQC!='None' & all$OverallQual <= 6,c('PoolQC', 'PoolArea', 'OverallQual', 'YearBuilt')]
+```
+
+Houses with OverallQual=6 have PoolQC either Fa(ir) or G(oo)d. Houses with 5 or less never have a pool. Let's give the 6-quality house a TA pool (between Good and Fair) and for the two others, a Fa(ir) one (one step above None).
+
+```{r}
+all$PoolQC[2504] <- 'TA'
+all$PoolQC[c(2421,2600)] <- 'Fa'
+```
+
+**Convert to integer**
+
+Pool quality is obviously ordered, so we can convert it to an integer.
+I will create a conversion dictionary to be reused on other variables. I add "Poor" level which is not present here but will be in others, it will create a wider gap between no pool (0) and some pool (2+) than between adjacent levels of "some pool".
+
+```{r}
+quality <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$PoolQC <- as.integer(revalue(all$PoolQC, quality))
+table(all$PoolQC)
+```
+Very few houses have pools BTW.
+
+### Misc Feature
+
+There are two variables telling about some extra feature of the house.
+
+MiscFeature: Miscellaneous feature not covered in other categories
+		
+       Elev	Elevator
+       Gar2	2nd Garage (if not described in garage section)
+       Othr	Other
+       Shed	Shed (over 100 SF)
+       TenC	Tennis Court
+       NA	None
+MiscVal: $Value of miscellaneous feature
+
+**Fix NA and check for inconsistencies**
+
+MiscFeature has 2814 NAs which we again can replace with None. Let's also do the same test: find houses that have a non-zero MiscVal but no MiscFeature listed.
+```{r}
+all[is.na(all$MiscFeature),'MiscFeature'] <- 'None'
+all[all$MiscFeature=='None' & all$MiscVal!=0,c('MiscFeature', 'MiscVal', 'OverallQual', 'YearBuilt')]
+```
+
+There is one house with a $17,000 something. A new and excellent quality one, too!
+
+```{r}
+ggplot(data=all, aes(x=MiscFeature, y=MiscVal)) + geom_boxplot() +
+        geom_text_repel(aes(label=ifelse(rownames(all)==2550,rownames(all),'')), col=2)
+```
+
+The only thing that can cost $17,000 is a second garage.
+```{r}
+all$MiscFeature[2550] <- 'Gar2'
+```
+
+**Conver to factor**
+
+Misc feature cannot be ordered in any sensible way, so I'll convert it to factor for now. Later all the factor variables will have to be one-hot encoded as not all the models can deal with factors.
+
+```{r}
+all$MiscFeature <- as.factor(all$MiscFeature)
+```
+
+### Alley
+
+Alley: Type of alley access to property
+
+       Grvl	Gravel
+       Pave	Paved
+       NA 	No alley access
+```{r}
+all$Alley[is.na(all$Alley)] <- 'None'
+```
+
+It may seem that a paved alley is better than gravel, and gravel better than none. However
+
+```{r}
+ggplot(data=all[!is.na(all$SalePrice),], aes(x=Alley, y=SalePrice)) +
+        geom_boxplot()
+```
+
+So let's keep it as factor.
+
+```{r}
+all$Alley <- as.factor(all$Alley)
+```
+
+### Fence
+
+Fence: Fence quality
+		
+       GdPrv	Good Privacy
+       MnPrv	Minimum Privacy
+       GdWo	Good Wood
+       MnWw	Minimum Wood/Wire
+       NA	No Fence
+```{r}
+all$Fence[is.na(all$Fence)] <- 'None'
+ggplot(data=all[!is.na(all$SalePrice),], aes(x=Fence, y=SalePrice)) +
+        geom_boxplot()
+```
+
+Again no obvious order, keeping as factor.
+```{r}
+all$Fence[is.na(all$Fence)] <- as.factor(all$Fence)
+```
+
+### Fireplace
+
+Fireplaces: Number of fireplaces
+
+FireplaceQu: Fireplace quality
+
+       Ex	Excellent - Exceptional Masonry Fireplace
+       Gd	Good - Masonry Fireplace in main level
+       TA	Average - Prefabricated Fireplace in main living area or Masonry Fireplace in basement
+       Fa	Fair - Prefabricated Fireplace in basement
+       Po	Poor - Ben Franklin Stove
+       NA	No Fireplace
+
+**Fixing NA and checking for inconsistencies**
+
+No data errors this time.
+```{r}
+all$FireplaceQu[is.na(all$FireplaceQu)] <- 'None'
+all[all$FireplaceQu=='None' & all$Fireplaces!=0,c('FireplaceQu', 'Fireplaces', 'OverallQual', 'YearBuilt')]
+```
+
+**Convert to integer**
+
+The quality dictionary comes handy.
+```{r}
+all$FireplaceQu <- as.integer(revalue(all$FireplaceQu, quality))
+table(all$FireplaceQu)
+```
+
+### Lot Properties
+
+LotFrontage is the only variable in this group that has NAs. There are also LotArea, LotShape and LotConfig.
+
+```{r}
+head(all[is.na(all$LotFrontage), c('LotFrontage', 'LotArea', 'LotShape', 'LotConfig')])
+```
+
+**Deal with factors**
+
+I deal with LotShape and LotConfig first because I will use them for imputation and it helps to have all the variables properly formatted.
+LotShape: General shape of property
+
+       Reg	Regular	
+       IR1	Slightly irregular
+       IR2	Moderately Irregular
+       IR3	Irregular
+LotConfig: Lot configuration
+
+       Inside	Inside lot
+       Corner	Corner lot
+       CulDSac	Cul-de-sac
+       FR2	Frontage on 2 sides of property
+       FR3	Frontage on 3 sides of property
+```{r}
+# LotShape is ordered, regular is best
+shapes <- c('IR3'=0, 'IR2'=1, 'IR1'=2, 'Reg'=3)
+all$LotShape <- as.integer(revalue(all$LotShape, shapes))
+
+# LotConfig is not ordered, keeping as factor
+all$LotConfig <- as.factor(all$LotConfig)
+```
+
+**Impute missing data**
+
+This will be the first time I actually impute missing data, as opposed to just changing NA to None or fixing obvious data entry errors. KNN imputation based on the remaning lot variables seems reasonable. knn.impute function from bnstruct package was glitching but knnImputation from DMwR worked fine with default parameters (k=10, impute with weighted average).
+
+```{r}
+summary(all$LotFrontage)
+lot <- all[,c('LotFrontage', 'LotArea', 'LotShape', 'LotConfig')]
+lot$LotShape <- as.factor(lot$LotShape)
+lot$LotConfig <- as.factor(lot$LotConfig)
+lot <- knnImputation(lot)
+all$LotFrontage <- lot$LotFrontage
+summary(all$LotFrontage)
+```
+Mean changed by less than a foot and median by less than two. All NAs are gone.
+
+### Garage
+
+Seven variables describe the garage: GarageType, GarageYrBlt, GarageFinish, GarageCars, GarageArea, GarageQual and GarageCond. All of them have at least one missing value. Let's deal with them one by one. First the easy ones for which NA means no garage according to data description.
+
+GarageType: Garage location
+		
+       2Types	More than one type of garage
+       Attchd	Attached to home
+       Basment	Basement Garage
+       BuiltIn	Built-In (Garage part of house - typically has room above garage)
+       CarPort	Car Port
+       Detchd	Detached from home
+       NA	No Garage
+
+GarageFinish: Interior finish of the garage
+
+       Fin	Finished
+       RFn	Rough Finished	
+       Unf	Unfinished
+       NA	No Garage
+       
+GarageQual: Garage quality
+
+       Ex	Excellent
+       Gd	Good
+       TA	Typical/Average
+       Fa	Fair
+       Po	Poor
+       NA	No Garage
+		
+GarageCond: Garage condition
+
+       Ex	Excellent
+       Gd	Good
+       TA	Typical/Average
+       Fa	Fair
+       Po	Poor
+       NA	No Garage
+
+**Fix NA**
+
+GarageQual and GarageCond seem to be the same. I may drop one of them at the feature selection stage.
+       
+```{r}
+all$GarageType[is.na(all$GarageType)] <- "None"
+all$GarageFinish[is.na(all$GarageFinish)] <- "None"
+all$GarageQual[is.na(all$GarageQual)] <- "None"
+all$GarageCond[is.na(all$GarageCond)] <- "None"
+```
+
+That leaves me with GarageYrBuilt, GarageCars and GarageArea.
+
+```{r}
+garage <- all[,c('GarageType', 'GarageYrBlt', 'GarageFinish', 'GarageCars', 'GarageArea', 'GarageQual', 'GarageCond')]
+garage[is.na(garage$GarageCars) | is.na(garage$GarageArea),]
+head(garage[is.na(garage$GarageYrBlt),])
+```
+
+The one house that has GarageCars and GarageArea missing simply has no garage. It does have GarageType = Detchd for some reason, I'll assume it is an error and change GarageType to None. All the others do not have a garage either, but we need to fill the GarageYrBlt with something nevertheless. One choice is to use the year when the house itself was built.
+
+```{r}
+garage$GarageType[2577] <- "None"
+garage$GarageYrBlt[is.na(garage$GarageYrBlt)] <- all$YearBuilt[is.na(all$GarageYrBlt)]
+```
+
+**Check for inconsistencies**
+
+Except for GarageYrBlt that cannot be blank, all the other variables should either be None/0 all together, or none of them.
+
+```{r}
+d <- matrix(nrow=6, ncol=2)
+d[1,] <- dim(garage[garage$GarageType=='None',])
+d[2,] <- dim(garage[garage$GarageFinish=='None',])
+d[3,] <- dim(garage[garage$GarageQual=='None',])
+d[4,] <- dim(garage[garage$GarageCond=='None',])
+d[5,] <- dim(garage[garage$GarageCars==0,])
+d[6,] <- dim(garage[garage$GarageArea==0,])
+d
+```
+
+There are 159 houses with GarageFinish, GarageQual and GarageCond equal to None, but only 158 such that GarageType, GarageArea or GarageCars are None/0. Let's find the gap.
+
+```{r}
+g158 <- garage$GarageType=='None' | garage$GarageArea==0 | garage$GarageCars==0
+g159 <- garage$GarageFinish=='None' & garage$GarageQual=='None' & garage$GarageCond=='None'
+garage[g159 & !g158,]
+```
+There is one 1910 (sic!) garage for one car with some area that has GarageFinish, GarageQual and GarageCond missing. As this is just one house, I will fill the garage data with most common values, then check again for consistency.
+
+```{r}
+garage$GarageFinish[2127] <- 'Unf'
+garage$GarageQual[2127] <- 'TA'
+garage$GarageCond[2127] <- 'TA'
+d[1,] <- dim(garage[garage$GarageType=='None',])
+d[2,] <- dim(garage[garage$GarageFinish=='None',])
+d[3,] <- dim(garage[garage$GarageQual=='None',])
+d[4,] <- dim(garage[garage$GarageCond=='None',])
+d[5,] <- dim(garage[garage$GarageCars==0,])
+d[6,] <- dim(garage[garage$GarageArea==0,])
+d
+```
+Great, 158 of everything. 
+
+**Deal with factors**
+
+Out of our seven variables:
+
+- GarageYrBlt, GarageCars, GarageArea are already integer
+- GarageQual and GarageCond can be integerized with quality dictionary
+- GarageFinish has its own order
+- GarageType stays as factor
+
+```{r}
+garage$GarageQual <- as.integer(revalue(garage$GarageQual, quality))
+garage$GarageCond <- as.integer(revalue(garage$GarageCond, quality))
+gfinish <- c('None'=0,'Unf'=1, 'RFn'=2, 'Fin'=3)
+garage$GarageFinish <- as.integer(revalue(garage$GarageFinish, gfinish))
+garage$GarageType <- as.factor(garage$GarageType)
+all[,c('GarageType', 'GarageYrBlt', 'GarageFinish', 'GarageCars', 'GarageArea', 'GarageQual', 'GarageCond')] <- garage
+```
+
+### Basement
+
+Another mega-group with 11 features: BsmtCond, BsmtQual, BsmtExposure, BsmtFinType1, BsmtFinType2, BsmtFinSF1, BsmtFinSF2, BsmtUnfSF, BsmtFullBath, BsmtHalfBath, TotalBsmtSF, all of which have some NAs.
+
+**Deal with NA**
+
+In five features, NA means no basement.
+```{r}
+all$BsmtQual[is.na(all$BsmtQual)] <- 'None'
+all$BsmtCond[is.na(all$BsmtCond)] <- 'None'
+all$BsmtExposure[is.na(all$BsmtExposure)] <- 'None'
+all$BsmtFinType1[is.na(all$BsmtFinType1)] <- 'None'
+all$BsmtFinType2[is.na(all$BsmtFinType2)] <- 'None'
+```
+
+In the remaining six, it probably means the same and can be substituted with 0 as they are numeric. However let's check.
+
+```{r}
+all[is.na(all$BsmtFinSF1) | is.na(all$BsmtFinSF2) | is.na(all$BsmtUnfSF) | is.na(all$BsmtFullBath) | is.na(all$BsmtHalfBath) | is.na(all$TotalBsmtSF), c('BsmtCond', 'BsmtQual', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'BsmtFullBath', 'BsmtHalfBath', 'TotalBsmtSF')]
+```
+
+Just two houses with obviously no basement. Replacing those NAs with 0.
+```{r}
+all[c(2121,2189),c('BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'BsmtFullBath', 'BsmtHalfBath', 'TotalBsmtSF')] <- 0
+```
+
+**Deal with factors**
+
+BsmtQual and BsmtCond can be treated with quality dictionary.  BsmtExposure, BsmtFinType1 and BsmtFinType2 have their own.
+```{r}
+all$BsmtQual <- as.integer(revalue(all$BsmtQual, quality))
+all$BsmtCond <- as.integer(revalue(all$BsmtCond, quality))
+expo_dict <- c('None'=0, 'No'=1, 'Mn'=2, 'Av'=3, 'Gd'=4)
+all$BsmtExposure <- as.integer(revalue(all$BsmtExposure, expo_dict))
+fintype_dict <- c('None'=0, 'Unf'=1, 'LwQ'=2, 'Rec'=3, 'BLQ'=4, 'ALQ'=5, 'GLQ'=6)
+all$BsmtFinType1 <- as.integer(revalue(all$BsmtFinType1, fintype_dict))
+all$BsmtFinType2 <- as.integer(revalue(all$BsmtFinType2, fintype_dict))
+```
+
+Let's check for consistency. All the 11 variables should have the same amount of 0 (everything is encoded with 0 no, no string values).
+
+```{r}
+d <- c()
+d[1] <- sum(all$BsmtCond==0)
+d[2] <- sum(all$BsmtQual==0)
+d[3] <- sum(all$BsmtExposure==0)
+d[4] <- sum(all$BsmtFinType1==0)
+d[5] <- sum(all$BsmtFinType2==0)
+d[6] <- sum(all$BsmtFinSF1==0)
+d[7] <- sum(all$BsmtFinSF2==0)
+d[8] <- sum(all$BsmtUnfSF==0)
+d[9] <- sum(all$BsmtFullBath==0)
+d[10] <- sum(all$BsmtHalfBath==0)
+d[11] <- sum(all$TotalBsmtSF==0)
+d
+```
+
+Okay not all of them. BsmtFinSF1, BsmtFinSF2, BsmtUnfSF, BsmtFullBath and BsmtHalfBath can be zero even in a house wiht a basement (but no bathroom there or no finished / unfinished square feet). However, BsmtCond, BsmtQual, BsmtExposure, BsmtFinType1, BsmtFinType2 and TotalBsmtSF should only be zero for the houses with no basement, that it, the same amoutn of them.
+
+```{r}
+all[(all$BsmtCond==0 | all$BsmtExposure==0 | all$BsmtQual==0) & all$TotalBsmtSF!=0,c('BsmtCond', 'BsmtQual', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'TotalBsmtSF')]
+```
+
+Three problematic houses show basement exposure as 0 (no basement), but they do have other fields filled in, so probably there is a basement. They all have BsmtCond=3 and BsmtQual=4, and such houses mostly have no exposure (BsmtExp=1 in my encoding).
+
+```{r}
+table(all$BsmtExposure[all$BsmtCond==3 & all$BsmtQual==4])
+```
+
+Three more have BsmtCond=0 (no basement), but again all the other variables filled in. Judging by BsmtQual, they should have BsmtCond=3.
+```{r}
+table(all$BsmtCond[all$BsmtQual %in% c(3,4)])
+```
+
+Yet two more have BsmtQual=0 with all the others filled in. They will get BsmtCond of 3 (yes, if you check for BsmtCond 2 and 3 separately, you will get the same result).
+
+```{r}
+table(all$BsmtQual[all$BsmtCond %in% c(2,3)])
+```
+
+Fix exposure, condition and quality, check everything again.
+```{r}
+all$BsmtExposure[c(949,1488,2349)] <- 1
+all$BsmtCond[c(2041, 2186, 2525)] <- 3
+all$BsmtQual[c(2218,2219)] <- 3
+d <- c()
+d[1] <- sum(all$BsmtCond==0)
+d[2] <- sum(all$BsmtQual==0)
+d[3] <- sum(all$BsmtExposure==0)
+d[4] <- sum(all$BsmtFinType1==0)
+d[5] <- sum(all$BsmtFinType2==0)
+d[5] <- sum(all$TotalBsmtSF==0)
+d
+``` 
+
+Incredible! 
+
+# Feature engineering
+
+# Data preprocessing (feature selection, outliers, transformations)
+
+# Modeling

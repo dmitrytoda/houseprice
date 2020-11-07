@@ -4,6 +4,7 @@ library(lubridate)
 library(caret)
 library(dplyr)
 library(Boruta)
+library(psych)  
 set.seed(1101)
 
 orig_train <- read.csv('train.csv') #, na.strings = '')
@@ -27,10 +28,10 @@ rmse <- function(x,y) {
 
 # MoSold, YrSold, YearBuilt, YearRemodAdd  : int -> date
 
-# num_predictors <- colnames(select_if(orig_train, is.numeric))
-# fact_predictors <- colnames(orig_train)
-# fact_predictors <- fact_predictors[!fact_predictors %in% num_predictors]
-# num_predictors <- num_predictors[!num_predictors %in% c('Id','SalePrice')]
+num_predictors <- colnames(select_if(orig_train, is.numeric))
+fact_predictors <- colnames(orig_train)
+fact_predictors <- fact_predictors[!fact_predictors %in% num_predictors]
+num_predictors <- num_predictors[!num_predictors %in% c('Id','SalePrice')]
 
 ############################################################
 
