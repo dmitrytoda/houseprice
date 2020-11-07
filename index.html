@@ -391,6 +391,18 @@ summary {
 <li><a href="#lot-properties"><span class="toc-section-number">3.1.6</span> Lot Properties</a></li>
 <li><a href="#garage"><span class="toc-section-number">3.1.7</span> Garage</a></li>
 <li><a href="#basement"><span class="toc-section-number">3.1.8</span> Basement</a></li>
+<li><a href="#masonry-veneer-and-exterior"><span class="toc-section-number">3.1.9</span> Masonry Veneer and Exterior</a></li>
+<li><a href="#mszoning-and-mssubclass"><span class="toc-section-number">3.1.10</span> MSZoning and MSSubClass</a></li>
+<li><a href="#utilities"><span class="toc-section-number">3.1.11</span> Utilities</a></li>
+<li><a href="#functional"><span class="toc-section-number">3.1.12</span> Functional</a></li>
+<li><a href="#electrical"><span class="toc-section-number">3.1.13</span> Electrical</a></li>
+<li><a href="#kitchen"><span class="toc-section-number">3.1.14</span> Kitchen</a></li>
+<li><a href="#saletype"><span class="toc-section-number">3.1.15</span> SaleType</a></li>
+<li><a href="#final-na-check"><span class="toc-section-number">3.1.16</span> Final NA check</a></li>
+</ul></li>
+<li><a href="#factor-predictors"><span class="toc-section-number">3.2</span> Factor predictors</a><ul>
+<li><a href="#remaining-character-features"><span class="toc-section-number">3.2.1</span> Remaining character features</a></li>
+<li><a href="#what-next"><span class="toc-section-number">3.2.2</span> What next?</a></li>
 </ul></li>
 </ul></li>
 <li><a href="#feature-engineering"><span class="toc-section-number">4</span> Feature engineering</a></li>
@@ -765,6 +777,8 @@ garage[is.na(garage$GarageCars) | is.na(garage$GarageArea),]</code></pre>
 ## 100       None</code></pre>
 <p>The one house that has GarageCars and GarageArea missing simply has no garage. It does have GarageType = Detchd for some reason, I’ll assume it is an error and change GarageType to None. All the others do not have a garage either, but we need to fill the GarageYrBlt with something nevertheless. One choice is to use the year when the house itself was built.</p>
 <pre class="r"><code>garage$GarageType[2577] &lt;- &quot;None&quot;
+garage$GarageCars[2577] &lt;- 0
+garage$GarageArea[2577] &lt;- 0
 garage$GarageYrBlt[is.na(garage$GarageYrBlt)] &lt;- all$YearBuilt[is.na(all$GarageYrBlt)]</code></pre>
 <p><strong>Check for inconsistencies</strong></p>
 <p>Except for GarageYrBlt that cannot be blank, all the other variables should either be None/0 all together, or none of them.</p>
@@ -911,6 +925,277 @@ d[5] &lt;- sum(all$TotalBsmtSF==0)
 d</code></pre>
 <pre><code>## [1] 79 79 79 79 79</code></pre>
 <p>Incredible!</p>
+</div>
+<div id="masonry-veneer-and-exterior" class="section level3">
+<h3><span class="header-section-number">3.1.9</span> Masonry Veneer and Exterior</h3>
+<p>MasVnrType: Masonry veneer type</p>
+<pre><code>   BrkCmn   Brick Common
+   BrkFace  Brick Face
+   CBlock   Cinder Block
+   None None
+   Stone    Stone</code></pre>
+<p>MasVnrArea: Masonry veneer area in square feet</p>
+<p>MasVnrType is missing 24 values. MasVnrArea is missing 23. Logically it makes sense combine the masonry veneer (the decorative stuff that covers the walls outside) with Exterior properties. Many of possible exterior coverings are the same materials mentioned in veneer.</p>
+<p>Exterior1st: Exterior covering on house</p>
+<pre><code>   AsbShng  Asbestos Shingles
+   AsphShn  Asphalt Shingles
+   BrkComm  Brick Common
+   BrkFace  Brick Face
+   CBlock   Cinder Block
+   CemntBd  Cement Board
+   HdBoard  Hard Board
+   ImStucc  Imitation Stucco
+   MetalSd  Metal Siding
+   Other    Other
+   Plywood  Plywood
+   PreCast  PreCast 
+   Stone    Stone
+   Stucco   Stucco
+   VinylSd  Vinyl Siding
+   Wd Sdng  Wood Siding
+   WdShing  Wood Shingles</code></pre>
+<p>Exterior2nd: Exterior covering on house (if more than one material)</p>
+<p>ExterQual: Evaluates the quality of the material on the exterior</p>
+<pre><code>   Ex   Excellent
+   Gd   Good
+   TA   Average/Typical
+   Fa   Fair
+   Po   Poor</code></pre>
+<p>ExterCond: Evaluates the present condition of the material on the exterior</p>
+<pre><code>   Ex   Excellent
+   Gd   Good
+   TA   Average/Typical
+   Fa   Fair
+   Po   Poor</code></pre>
+<p><strong>Deal with NA</strong></p>
+<pre class="r"><code>exterior &lt;- all[,c(&#39;MasVnrType&#39;, &#39;MasVnrArea&#39;, &#39;Exterior1st&#39;, &#39;Exterior2nd&#39;, &#39;ExterQual&#39;, &#39;ExterCond&#39;)]
+table(exterior$Exterior1st[is.na(exterior$MasVnrType)])</code></pre>
+<pre><code>## 
+## CemntBd Plywood VinylSd Wd Sdng WdShing 
+##       3       1      18       1       1</code></pre>
+<p>That means, none of the houses with missing MasVnrType have any kind of brick or stone on the exterior (although this values do exist in other rows), which probably means no masonry veneer. One value in Exterior1st is NA, let’s keep that row for now and fix the rest of the MasVnrType to None and MasVnrArea to 0.</p>
+<pre class="r"><code>exterior$MasVnrType[is.na(exterior$MasVnrType) &amp; !is.na(exterior$Exterior1st)] &lt;- &#39;None&#39;
+exterior$MasVnrArea[is.na(exterior$MasVnrArea) &amp; !is.na(exterior$Exterior1st)] &lt;- 0
+exterior[rowSums(is.na(exterior))&gt;0,]</code></pre>
+<pre><code>##      MasVnrType MasVnrArea Exterior1st Exterior2nd ExterQual ExterCond
+## 2152       None          0        &lt;NA&gt;        &lt;NA&gt;        TA        TA</code></pre>
+<p>I’m left with one case opposite of what I just dealt with: MasVnrType and MasVnrArea are known to be None and 0 (and I did not fix these), but Exterior1st and 2nd are NA. Let’s see what are the usual values.</p>
+<pre class="r"><code>table(exterior$Exterior1st[exterior$MasVnrType==&#39;None&#39;])</code></pre>
+<pre><code>## 
+## AsbShng AsphShn BrkComm BrkFace  CBlock CemntBd HdBoard ImStucc MetalSd Plywood 
+##      40       2       6      84       2      72     207       1     314     131 
+##   Stone  Stucco VinylSd Wd Sdng WdShing 
+##       2      36     504     322      42</code></pre>
+<p>The most popular exterior for houses without masonry veneer is apparently VinylSd (same for Exterior2nd BTW), let’s assign this value to our one case. And then remember there was 24 missing MasVnrType but only 23 MasVnrArea? Let’s look at that one too.</p>
+<pre class="r"><code>exterior$Exterior1st[2152] &lt;- &#39;VinylSd&#39;
+exterior$Exterior2nd[2152] &lt;- &#39;VinylSd&#39;
+exterior[exterior$MasVnrType==&#39;None&#39; &amp; exterior$MasVnrArea!=0,]</code></pre>
+<pre><code>##      MasVnrType MasVnrArea Exterior1st Exterior2nd ExterQual ExterCond
+## 625        None        288     VinylSd     VinylSd        TA        TA
+## 774        None          1     Wd Sdng     Wd Sdng        TA        TA
+## 1231       None          1     Plywood     Plywood        TA        TA
+## 1301       None        344     VinylSd     VinylSd        Gd        TA
+## 1335       None        312     HdBoard     HdBoard        TA        TA
+## 1670       None        285     VinylSd     VinylSd        Ex        TA
+## 2453       None          1     MetalSd     MetalSd        TA        TA
+## 2611       None        198     Plywood     Plywood        TA        TA</code></pre>
+<p>That means, apart from the one row that I fixed, there were 7 others that had MasVnrType=None but some area assigned. I will leave the ones with Area=1 unchanged as 1 is almost 0, but for the others I will change MasVnrType to the most common value.</p>
+<pre class="r"><code># Taking 2nd value as the 1st one is None
+exterior$MasVnrType[exterior$MasVnrType==&#39;None&#39; &amp; exterior$MasVnrArea&gt;1] &lt;- names(sort(-table(all$MasVnrType)))[2]</code></pre>
+<p><strong>Deal with factors</strong></p>
+<p>ExterQual and ExterCond can be ordinalized with quality dictionary. Exterior1st and Exterior2nd have to stay as factors. MasVnrType is not clear yet.</p>
+<pre class="r"><code>exterior$ExterQual &lt;- as.integer(revalue(exterior$ExterQual, quality))</code></pre>
+<pre><code>## The following `from` values were not present in `x`: None, Po</code></pre>
+<pre class="r"><code>exterior$ExterCond &lt;- as.integer(revalue(exterior$ExterCond, quality))</code></pre>
+<pre><code>## The following `from` values were not present in `x`: None</code></pre>
+<pre class="r"><code>exterior$Exterior1st &lt;- as.factor(exterior$Exterior1st)
+exterior$Exterior2nd &lt;- as.factor(exterior$Exterior2nd)
+exterior$SalePrice &lt;- all$SalePrice
+ggplot(data=exterior[!is.na(exterior$SalePrice),], aes(x=MasVnrType, y=SalePrice)) + geom_boxplot()</code></pre>
+<p><img src="data:image/png;base64,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" width="672" /></p>
+<p>While there is some difference in the median price between different veneers, it is also quite variable so I’ll keep it is factor.</p>
+<pre class="r"><code>exterior$MasVnrType &lt;- as.factor(exterior$MasVnrType)
+exterior$SalePrice &lt;- NULL
+all[,c(&#39;MasVnrType&#39;, &#39;MasVnrArea&#39;, &#39;Exterior1st&#39;, &#39;Exterior2nd&#39;, &#39;ExterQual&#39;, &#39;ExterCond&#39;)] &lt;- exterior</code></pre>
+</div>
+<div id="mszoning-and-mssubclass" class="section level3">
+<h3><span class="header-section-number">3.1.10</span> MSZoning and MSSubClass</h3>
+<p>MSZoning: Identifies the general zoning classification of the sale.</p>
+<pre><code>   A    Agriculture
+   C    Commercial
+   FV   Floating Village Residential
+   I    Industrial
+   RH   Residential High Density
+   RL   Residential Low Density
+   RP   Residential Low Density Park 
+   RM   Residential Medium Density
+   </code></pre>
+<p>MSSubClass: Identifies the type of dwelling involved in the sale.</p>
+<pre><code>    20  1-STORY 1946 &amp; NEWER ALL STYLES
+    30  1-STORY 1945 &amp; OLDER
+    40  1-STORY W/FINISHED ATTIC ALL AGES
+    45  1-1/2 STORY - UNFINISHED ALL AGES
+    ..etc..
+   </code></pre>
+<p><strong>Deal with NA</strong></p>
+<p>MSZoning misses 4 values. Let’s impute with mode for each neighbourhood.</p>
+<pre class="r"><code>all[is.na(all$MSZoning),c(&#39;MSZoning&#39;, &#39;Neighborhood&#39;)]</code></pre>
+<pre><code>##      MSZoning Neighborhood
+## 1916     &lt;NA&gt;       IDOTRR
+## 2217     &lt;NA&gt;       IDOTRR
+## 2251     &lt;NA&gt;       IDOTRR
+## 2905     &lt;NA&gt;      Mitchel</code></pre>
+<pre class="r"><code>all$MSZoning[c(1916,2217,2251)] &lt;- sort(names(-table(all$MSZoning[all$Neighborhood==&#39;IDOTRR&#39;])))[1]
+all$MSZoning[2905] &lt;- sort(names(-table(all$MSZoning[all$Neighborhood==&#39;Mitchel&#39;])))[1]</code></pre>
+<p><strong>Deal with factors</strong></p>
+<p>MSZoning is definitely a factor, but more than that, MSSubClass is too, although represented by integer.</p>
+<pre class="r"><code>all$MSSubClass &lt;- as.factor(all$MSSubClass)
+all$MSZoning &lt;- as.factor(all$MSZoning)</code></pre>
+</div>
+<div id="utilities" class="section level3">
+<h3><span class="header-section-number">3.1.11</span> Utilities</h3>
+<p>Utilities: Type of utilities available</p>
+<pre><code>   AllPub   All public Utilities (E,G,W,&amp; S)    
+   NoSewr   Electricity, Gas, and Water (Septic Tank)
+   NoSeWa   Electricity and Gas Only
+   ELO  Electricity only</code></pre>
+<p>First I thought NA meant None. But the table shows that all but one houses have all utilitites.</p>
+<pre class="r"><code>table(all$Utilities)</code></pre>
+<pre><code>## 
+## AllPub NoSeWa 
+##   2916      1</code></pre>
+<pre class="r"><code>all[is.na(all$Utilities) | all$Utilities==&#39;NoSeWa&#39;, c(&#39;Utilities&#39;, &#39;SalePrice&#39;)]</code></pre>
+<pre><code>##      Utilities SalePrice
+## 945     NoSeWa    137500
+## 1916      &lt;NA&gt;        NA
+## 1946      &lt;NA&gt;        NA</code></pre>
+<ol style="list-style-type: decimal">
+<li>The only house with NoSeWa is in training set</li>
+<li>Both houses with NA are in test set</li>
+<li>Everything else is AllPub</li>
+</ol>
+<p>Imputing it to either AllPub or None would be useless for prediction (AllPub = no difference with others, None = no more data like this). This column can be dropped.</p>
+<pre class="r"><code>all$Utilities &lt;- NULL</code></pre>
+</div>
+<div id="functional" class="section level3">
+<h3><span class="header-section-number">3.1.12</span> Functional</h3>
+<p>Functional: Home functionality (Assume typical unless deductions are warranted)</p>
+<pre><code>   Typ  Typical Functionality
+   Min1 Minor Deductions 1
+   Min2 Minor Deductions 2
+   Mod  Moderate Deductions
+   Maj1 Major Deductions 1
+   Maj2 Major Deductions 2
+   Sev  Severely Damaged
+   Sal  Salvage only
+   </code></pre>
+<p>Imputing with mode (which happens to by Typ) and ordering.</p>
+<pre class="r"><code>all$Functional[is.na(all$Functional)] &lt;- &#39;Typ&#39;
+func_dict &lt;- c(&#39;Sal&#39;=0, &#39;Sev&#39;=1, &#39;Maj2&#39;=2, &#39;Maj1&#39;=3, &#39;Mod&#39;=4, &#39;Min2&#39;=5, &#39;Min1&#39;=6, &#39;Typ&#39;=7)
+all$Functional &lt;- as.integer(revalue(all$Functional, func_dict))</code></pre>
+<pre><code>## The following `from` values were not present in `x`: Sal</code></pre>
+</div>
+<div id="electrical" class="section level3">
+<h3><span class="header-section-number">3.1.13</span> Electrical</h3>
+<p>Electrical: Electrical system</p>
+<pre><code>   SBrkr    Standard Circuit Breakers &amp; Romex
+   FuseA    Fuse Box over 60 AMP and all Romex wiring (Average) 
+   FuseF    60 AMP Fuse Box and mostly Romex wiring (Fair)
+   FuseP    60 AMP Fuse Box and mostly knob &amp; tube wiring (poor)
+   Mix  Mixed
+   </code></pre>
+<p>Impute one missing value to mode (SBrkr), keep as factor as no obvious ordering.</p>
+<pre class="r"><code>all$Electrical[is.na(all$Electrical)] &lt;- &#39;Sbrkr&#39;
+all$Electrical &lt;- as.factor(all$Electrical)</code></pre>
+</div>
+<div id="kitchen" class="section level3">
+<h3><span class="header-section-number">3.1.14</span> Kitchen</h3>
+<p>Kitchen: Kitchens above grade</p>
+<p>KitchenQual: Kitchen quality</p>
+<pre><code>   Ex   Excellent
+   Gd   Good
+   TA   Typical/Average
+   Fa   Fair
+   Po   Poor</code></pre>
+<pre class="r"><code>all[is.na(all$KitchenQual),c(&#39;KitchenAbvGr&#39;, &#39;KitchenQual&#39;, &#39;OverallQual&#39;)]</code></pre>
+<pre><code>##      KitchenAbvGr KitchenQual OverallQual
+## 1556            1        &lt;NA&gt;           5</code></pre>
+<p>I will impute with mode for OverallQual=5, then ordinalize.</p>
+<pre class="r"><code>all$KitchenQual[1556] &lt;- names(sort(-table(all$KitchenQual[all$OverallQual==5])))[1]
+all$KitchenQual &lt;- as.integer(revalue(all$KitchenQual, quality))</code></pre>
+<pre><code>## The following `from` values were not present in `x`: None, Po</code></pre>
+</div>
+<div id="saletype" class="section level3">
+<h3><span class="header-section-number">3.1.15</span> SaleType</h3>
+<p>SaleType: Type of sale</p>
+<pre><code>   WD   Warranty Deed - Conventional
+   CWD  Warranty Deed - Cash
+   VWD  Warranty Deed - VA Loan
+   New  Home just constructed and sold
+   COD  Court Officer Deed/Estate
+   Con  Contract 15% Down payment regular terms
+   ConLw    Contract Low Down payment and low interest
+   ConLI    Contract Low Interest
+   ConLD    Contract Low Down
+   Oth  Other</code></pre>
+<p>Impute with mode, keep as factor.</p>
+<pre class="r"><code>all$SaleType[is.na(all$SaleType)] &lt;- names(sort(-table(all$SaleType)))[1]
+all$SaleType &lt;- as.factor(all$SaleType)</code></pre>
+</div>
+<div id="final-na-check" class="section level3">
+<h3><span class="header-section-number">3.1.16</span> Final NA check</h3>
+<pre class="r"><code>NA_cols &lt;- sapply(all[,-80], function(x) sum(is.na(x)))
+sort(NA_cols[NA_cols != 0], decreasing=TRUE)</code></pre>
+<pre><code>## SalePrice 
+##      1459</code></pre>
+<p>Awesome, the only remaining NAs are those in SalePrice!</p>
+</div>
+</div>
+<div id="factor-predictors" class="section level2">
+<h2><span class="header-section-number">3.2</span> Factor predictors</h2>
+<p>I changed some of the character predictors to either factors or integers. Let’s see what is left, do the same, then one-hot encode all the factors.</p>
+<div id="remaining-character-features" class="section level3 tabset">
+<h3><span class="header-section-number">3.2.1</span> Remaining character features</h3>
+<pre class="r"><code>charPredictors &lt;- which(sapply(all, is.character))
+charPredNames &lt;- names(charPredictors)
+paste(&#39;There are still&#39;, length(charPredNames), &#39;character features left&#39;)</code></pre>
+<pre><code>## [1] &quot;There are still 17 character features left&quot;</code></pre>
+<div id="ordered-features" class="section level4">
+<h4><span class="header-section-number">3.2.1.1</span> Ordered features</h4>
+<p>LandSlope: Slope of property</p>
+<pre><code>   Gtl  Gentle slope
+   Mod  Moderate Slope  
+   Sev  Severe Slope</code></pre>
+<p>HeatingQC: Heating quality and condition</p>
+<pre><code>   Ex   Excellent
+   Gd   Good
+   TA   Average/Typical
+   Fa   Fair
+   Po   Poor</code></pre>
+<p>PavedDrive: Paved driveway</p>
+<pre><code>   Y    Paved 
+   P    Partial Pavement
+   N    Dirt/Gravel
+   </code></pre>
+<pre class="r"><code>slope_dict &lt;- c(&#39;Sev&#39;=0, &#39;Mod&#39;=1, &#39;Gtl&#39;=2)
+pave_dict &lt;- c(&#39;N&#39;=0, &#39;P&#39;=1, &#39;Y&#39;=2)
+all$LandSlope &lt;- as.integer(revalue(all$LandSlope, slope_dict))
+all$HeatingQC &lt;- as.integer(revalue(all$HeatingQC, quality))</code></pre>
+<pre><code>## The following `from` values were not present in `x`: None</code></pre>
+<pre class="r"><code>all$PavedDrive &lt;- as.integer(revalue(all$PavedDrive, pave_dict))</code></pre>
+</div>
+<div id="true-factors-cannot-be-ordered" class="section level4">
+<h4><span class="header-section-number">3.2.1.2</span> True factors (cannot be ordered)</h4>
+<p>Remaining variables do not have an obvious order, keeping as factors.</p>
+<pre class="r"><code>charPredictors &lt;- which(sapply(all, is.character))
+charPredNames &lt;- names(charPredictors)
+for (i in charPredNames)
+        all[,i] &lt;- as.factor(all[,i])</code></pre>
+</div>
+</div>
+<div id="what-next" class="section level3">
+<h3><span class="header-section-number">3.2.2</span> What next?</h3>
+<p>For everything kept as factor until now, I will create dummy variables using one-hot encoding. If you read this far, you probably know how it works.</p>
 </div>
 </div>
 </div>

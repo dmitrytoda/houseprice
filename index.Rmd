@@ -30,6 +30,7 @@ library(corrplot)
 library(ggrepel)
 library(plyr)
 library(DMwR)
+library(gridExtra)
 set.seed(1101)
 ```
 ```{r}
@@ -146,7 +147,7 @@ ggplot(data = all[!is.na(all$SalePrice),], aes(x=factor(GarageCars), y=SalePrice
         geom_text_repel(aes(label=ifelse(all[!is.na(all$SalePrice),'SalePrice']>650000,rownames(all),'')), col=2)
 ```
 
-# Missing data and factor predictors
+# Missing data; factor and date predictors
 
 These are all the columns with NA data, sorted by the number of NAs. Some of these features forms groups (Pool, Garage etc). I will deal with NAs group by group, going top to bottom. As I go, I will convert character features to either integers (where they are obviously ordered) or to factors otherwise.
 
@@ -435,6 +436,8 @@ The one house that has GarageCars and GarageArea missing simply has no garage. I
 
 ```{r}
 garage$GarageType[2577] <- "None"
+garage$GarageCars[2577] <- 0
+garage$GarageArea[2577] <- 0
 garage$GarageYrBlt[is.na(garage$GarageYrBlt)] <- all$YearBuilt[is.na(all$GarageYrBlt)]
 ```
 
@@ -590,6 +593,399 @@ d
 ``` 
 
 Incredible! 
+
+
+### Masonry Veneer and Exterior
+
+MasVnrType: Masonry veneer type
+
+       BrkCmn	Brick Common
+       BrkFace	Brick Face
+       CBlock	Cinder Block
+       None	None
+       Stone	Stone
+	
+MasVnrArea: Masonry veneer area in square feet
+
+MasVnrType is missing 24 values. MasVnrArea is missing 23. Logically it makes sense combine the masonry veneer (the decorative stuff that covers the walls outside) with Exterior properties. Many of possible exterior coverings are the same materials mentioned in veneer.
+
+Exterior1st: Exterior covering on house
+
+       AsbShng	Asbestos Shingles
+       AsphShn	Asphalt Shingles
+       BrkComm	Brick Common
+       BrkFace	Brick Face
+       CBlock	Cinder Block
+       CemntBd	Cement Board
+       HdBoard	Hard Board
+       ImStucc	Imitation Stucco
+       MetalSd	Metal Siding
+       Other	Other
+       Plywood	Plywood
+       PreCast	PreCast	
+       Stone	Stone
+       Stucco	Stucco
+       VinylSd	Vinyl Siding
+       Wd Sdng	Wood Siding
+       WdShing	Wood Shingles
+
+Exterior2nd: Exterior covering on house (if more than one material)
+
+ExterQual: Evaluates the quality of the material on the exterior 
+		
+       Ex	Excellent
+       Gd	Good
+       TA	Average/Typical
+       Fa	Fair
+       Po	Poor
+
+ExterCond: Evaluates the present condition of the material on the exterior
+		
+       Ex	Excellent
+       Gd	Good
+       TA	Average/Typical
+       Fa	Fair
+       Po	Poor
+
+**Deal with NA**
+
+```{r}
+exterior <- all[,c('MasVnrType', 'MasVnrArea', 'Exterior1st', 'Exterior2nd', 'ExterQual', 'ExterCond')]
+table(exterior$Exterior1st[is.na(exterior$MasVnrType)])
+```
+
+That means, none of the houses with missing MasVnrType have any kind of brick or stone on the exterior (although this values do exist in other rows), which probably means no masonry veneer. One value in Exterior1st is NA, let's keep that row for now and fix the rest of the MasVnrType to None and MasVnrArea to 0.
+
+```{r}
+exterior$MasVnrType[is.na(exterior$MasVnrType) & !is.na(exterior$Exterior1st)] <- 'None'
+exterior$MasVnrArea[is.na(exterior$MasVnrArea) & !is.na(exterior$Exterior1st)] <- 0
+exterior[rowSums(is.na(exterior))>0,]
+```
+
+I'm left with one case opposite of what I just dealt with: MasVnrType and MasVnrArea are known to be None and 0 (and I did not fix these), but Exterior1st and 2nd are NA. Let's see what are the usual values.
+
+```{r}
+table(exterior$Exterior1st[exterior$MasVnrType=='None'])
+```
+
+The most popular exterior for houses without masonry veneer is apparently VinylSd (same for Exterior2nd BTW), let's assign this value to our one case. And then remember there was 24 missing MasVnrType but only 23 MasVnrArea? Let's look at that one too.
+
+```{r}
+exterior$Exterior1st[2152] <- 'VinylSd'
+exterior$Exterior2nd[2152] <- 'VinylSd'
+exterior[exterior$MasVnrType=='None' & exterior$MasVnrArea!=0,]
+```
+
+That means, apart from the one row that I fixed, there were 7 others that had MasVnrType=None but some area assigned. I will leave the ones with Area=1 unchanged as 1 is almost 0, but for the others I will change MasVnrType to the most common value.
+
+```{r}
+# Taking 2nd value as the 1st one is None
+exterior$MasVnrType[exterior$MasVnrType=='None' & exterior$MasVnrArea>1] <- names(sort(-table(all$MasVnrType)))[2]
+```
+
+**Deal with factors**
+
+ExterQual and ExterCond can be ordinalized with quality dictionary. Exterior1st and Exterior2nd have to stay as factors. MasVnrType is not clear yet.
+
+```{r}
+exterior$ExterQual <- as.integer(revalue(exterior$ExterQual, quality))
+exterior$ExterCond <- as.integer(revalue(exterior$ExterCond, quality))
+exterior$Exterior1st <- as.factor(exterior$Exterior1st)
+exterior$Exterior2nd <- as.factor(exterior$Exterior2nd)
+exterior$SalePrice <- all$SalePrice
+ggplot(data=exterior[!is.na(exterior$SalePrice),], aes(x=MasVnrType, y=SalePrice)) + geom_boxplot()
+```
+
+While there is some difference in the median price between different veneers, it is also quite variable so I'll keep it is factor.
+
+```{r}
+exterior$MasVnrType <- as.factor(exterior$MasVnrType)
+exterior$SalePrice <- NULL
+all[,c('MasVnrType', 'MasVnrArea', 'Exterior1st', 'Exterior2nd', 'ExterQual', 'ExterCond')] <- exterior
+```
+
+### MSZoning and MSSubClass
+
+MSZoning: Identifies the general zoning classification of the sale.
+		
+       A	Agriculture
+       C	Commercial
+       FV	Floating Village Residential
+       I	Industrial
+       RH	Residential High Density
+       RL	Residential Low Density
+       RP	Residential Low Density Park 
+       RM	Residential Medium Density
+       
+MSSubClass: Identifies the type of dwelling involved in the sale.	
+
+        20	1-STORY 1946 & NEWER ALL STYLES
+        30	1-STORY 1945 & OLDER
+        40	1-STORY W/FINISHED ATTIC ALL AGES
+        45	1-1/2 STORY - UNFINISHED ALL AGES
+        ..etc..
+       
+**Deal with NA**
+
+MSZoning misses 4 values. Let's impute with mode for each neighbourhood.
+```{r}
+all[is.na(all$MSZoning),c('MSZoning', 'Neighborhood')]
+```
+
+```{r}
+all$MSZoning[c(1916,2217,2251)] <- sort(names(-table(all$MSZoning[all$Neighborhood=='IDOTRR'])))[1]
+all$MSZoning[2905] <- sort(names(-table(all$MSZoning[all$Neighborhood=='Mitchel'])))[1]
+```
+
+**Deal with factors**
+
+MSZoning is definitely a factor, but more than that, MSSubClass is too, although represented by integer.
+
+```{r}
+all$MSSubClass <- as.factor(all$MSSubClass)
+all$MSZoning <- as.factor(all$MSZoning)
+```
+
+### Utilities
+
+Utilities: Type of utilities available
+		
+       AllPub	All public Utilities (E,G,W,& S)	
+       NoSewr	Electricity, Gas, and Water (Septic Tank)
+       NoSeWa	Electricity and Gas Only
+       ELO	Electricity only
+
+First I thought NA meant None. But the table shows that all but one houses have all utilitites.
+
+```{r}
+table(all$Utilities)
+```
+
+```{r}
+all[is.na(all$Utilities) | all$Utilities=='NoSeWa', c('Utilities', 'SalePrice')]
+```
+
+1. The only house with NoSeWa is in training set
+2. Both houses with NA are in test set
+3. Everything else is AllPub
+
+Imputing it to either AllPub or None would be useless for prediction (AllPub = no difference with others, None = no more data like this). This column can be dropped.
+
+```{r}
+all$Utilities <- NULL
+```
+
+### Functional
+
+Functional: Home functionality (Assume typical unless deductions are warranted)
+
+       Typ	Typical Functionality
+       Min1	Minor Deductions 1
+       Min2	Minor Deductions 2
+       Mod	Moderate Deductions
+       Maj1	Major Deductions 1
+       Maj2	Major Deductions 2
+       Sev	Severely Damaged
+       Sal	Salvage only
+       
+Imputing with mode (which happens to by Typ) and ordering.
+       
+```{r}
+all$Functional[is.na(all$Functional)] <- 'Typ'
+func_dict <- c('Sal'=0, 'Sev'=1, 'Maj2'=2, 'Maj1'=3, 'Mod'=4, 'Min2'=5, 'Min1'=6, 'Typ'=7)
+all$Functional <- as.integer(revalue(all$Functional, func_dict))
+```
+
+
+### Electrical
+
+Electrical: Electrical system
+
+       SBrkr	Standard Circuit Breakers & Romex
+       FuseA	Fuse Box over 60 AMP and all Romex wiring (Average)	
+       FuseF	60 AMP Fuse Box and mostly Romex wiring (Fair)
+       FuseP	60 AMP Fuse Box and mostly knob & tube wiring (poor)
+       Mix	Mixed
+       
+Impute one missing value to mode (SBrkr), keep as factor as no obvious ordering.
+
+```{r}
+all$Electrical[is.na(all$Electrical)] <- 'Sbrkr'
+all$Electrical <- as.factor(all$Electrical)
+```
+### Kitchen
+
+Kitchen: Kitchens above grade
+
+KitchenQual: Kitchen quality
+
+       Ex	Excellent
+       Gd	Good
+       TA	Typical/Average
+       Fa	Fair
+       Po	Poor
+
+```{r}
+all[is.na(all$KitchenQual),c('KitchenAbvGr', 'KitchenQual', 'OverallQual')]
+```
+
+I will impute with mode for OverallQual=5, then ordinalize.
+
+```{r}
+all$KitchenQual[1556] <- names(sort(-table(all$KitchenQual[all$OverallQual==5])))[1]
+all$KitchenQual <- as.integer(revalue(all$KitchenQual, quality))
+```
+
+### SaleType
+
+SaleType: Type of sale
+		
+       WD 	Warranty Deed - Conventional
+       CWD	Warranty Deed - Cash
+       VWD	Warranty Deed - VA Loan
+       New	Home just constructed and sold
+       COD	Court Officer Deed/Estate
+       Con	Contract 15% Down payment regular terms
+       ConLw	Contract Low Down payment and low interest
+       ConLI	Contract Low Interest
+       ConLD	Contract Low Down
+       Oth	Other
+
+Impute with mode, keep as factor.
+```{r}
+all$SaleType[is.na(all$SaleType)] <- names(sort(-table(all$SaleType)))[1]
+all$SaleType <- as.factor(all$SaleType)
+```
+
+### Final NA check
+```{r}
+NA_cols <- sapply(all[,-80], function(x) sum(is.na(x)))
+sort(NA_cols[NA_cols != 0], decreasing=TRUE)
+```
+
+Awesome, the only remaining NAs are those in SalePrice!
+
+## Factor predictors
+
+I changed some of the character predictors to either factors or integers. Let's see what is left and do the same.
+
+### Remaining character features {.tabset}
+
+```{r}
+charPredictors <- which(sapply(all, is.character))
+charPredNames <- names(charPredictors)
+paste('There are still', length(charPredNames), 'character features left')
+```
+
+#### Ordered features
+
+LandSlope: Slope of property
+		
+       Gtl	Gentle slope
+       Mod	Moderate Slope	
+       Sev	Severe Slope
+
+HeatingQC: Heating quality and condition
+
+       Ex	Excellent
+       Gd	Good
+       TA	Average/Typical
+       Fa	Fair
+       Po	Poor
+
+PavedDrive: Paved driveway
+
+       Y	Paved 
+       P	Partial Pavement
+       N	Dirt/Gravel
+       
+```{r}
+slope_dict <- c('Sev'=0, 'Mod'=1, 'Gtl'=2)
+pave_dict <- c('N'=0, 'P'=1, 'Y'=2)
+all$LandSlope <- as.integer(revalue(all$LandSlope, slope_dict))
+all$HeatingQC <- as.integer(revalue(all$HeatingQC, quality))
+all$PavedDrive <- as.integer(revalue(all$PavedDrive, pave_dict))
+``` 
+       
+#### True factors (cannot be ordered)
+
+Remaining variables do not have an obvious order, keeping as factors.
+```{r}
+charPredictors <- which(sapply(all, is.character))
+charPredNames <- names(charPredictors)
+for (i in charPredNames)
+        all[,i] <- as.factor(all[,i])
+```
+
+
+### What next?
+
+For everything kept as factor until now, I will create dummy variables using one-hot encoding. If you read this far, you probably know how it works.
+
+
+
+
+
+## Date predictors
+
+There are 5 columns that represent date:
+
+1. YearBuilt is when the house was built
+2. YearRemodAdd is when it was remodelled
+3. GarageYrBuilt is when garage was built
+4. YrSold is year of sale
+5. MoSold is the month of sale
+
+I will combine YrSold and MoSold into date and plot the dependence of SalePrice from that date.
+
+```{r}
+sold <- all[!is.na(all$SalePrice), c('MoSold', 'YrSold', 'SalePrice')]
+sold$DateSold <- ymd(paste(sold$YrSold,sold$MoSold,'01'))
+monthly <- sold %>% group_by(DateSold) %>% dplyr::summarise(MoMean=mean(SalePrice))
+
+ggplot(data=sold, aes(x=DateSold, y=SalePrice)) +
+        geom_point(col='steelblue', alpha=.7) +
+        geom_line(data=monthly, aes(x=DateSold, y=MoMean))
+```
+
+There is some seasonality in the lower edge of the plot (cheap houses), however the monthly median fluctuates around the same level it quite a noisy manner. Let's also plot median sales by year and by month (all years combined).
+
+```{r}
+ys <- ggplot(data=all[!is.na(all$SalePrice),], aes(x=YrSold, y=SalePrice)) +
+        stat_summary(fun = "median", geom = "bar", fill='steelblue') +
+        scale_y_continuous(breaks= seq(0, 800000, by=50000), labels = comma) +
+        coord_cartesian(ylim = c(100000, 200000))
+
+ms <- ggplot(data=all[!is.na(all$SalePrice),], aes(x=MoSold, y=SalePrice)) +
+        stat_summary(fun = "median", geom = "bar", fill='steelblue') +
+        scale_y_continuous(breaks= seq(0, 800000, by=50000), labels = comma) +
+        coord_cartesian(ylim = c(100000, 200000)) +
+        scale_x_continuous(breaks=seq(1,12, by=1))
+
+grid.arrange(ys, ms, nrow=1)        
+```
+
+The order of years and months does not correspond to the order of median sale prices. It makes sense to convert both month and year sold to factors. YrSold can also be used to calculate the age of house at the moment of sale (starting feature engineering here although it is mostly done in the next chapter)
+
+```{r}
+all$MoSold <- as.factor(all$MoSold)
+all$Age <- all$YrSold - all$YearBuilt
+all$YrSold <- as.factor(all$YrSold)
+```
+
+# Features - deep dive
+
+At this stage
+
+1. There are no NA
+2. All variables are either numeric or factor
+3. One feature was deleted (Utilities) and one created (Age)
+
+Now I can vizualize correlations again to see if something changed, and also do some feature selection, using the factor variables as well.
+
+## Numeric features and correlations
+
+## Feature selection with boruta
 
 # Feature engineering
 
