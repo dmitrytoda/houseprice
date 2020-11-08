@@ -31,6 +31,8 @@ library(ggrepel)
 library(plyr)
 library(DMwR)
 library(gridExtra)
+library(lubridate)
+library(Boruta)
 set.seed(1101)
 ```
 ```{r}
@@ -865,11 +867,9 @@ sort(NA_cols[NA_cols != 0], decreasing=TRUE)
 
 Awesome, the only remaining NAs are those in SalePrice!
 
-## Factor predictors
+## Factor predictors {.tabset}
 
 I changed some of the character predictors to either factors or integers. Let's see what is left and do the same.
-
-### Remaining character features {.tabset}
 
 ```{r}
 charPredictors <- which(sapply(all, is.character))
@@ -877,7 +877,7 @@ charPredNames <- names(charPredictors)
 paste('There are still', length(charPredNames), 'character features left')
 ```
 
-#### Ordered features
+### Ordered features
 
 LandSlope: Slope of property
 		
@@ -907,7 +907,7 @@ all$HeatingQC <- as.integer(revalue(all$HeatingQC, quality))
 all$PavedDrive <- as.integer(revalue(all$PavedDrive, pave_dict))
 ``` 
        
-#### True factors (cannot be ordered)
+### True factors (cannot be ordered)
 
 Remaining variables do not have an obvious order, keeping as factors.
 ```{r}
@@ -916,15 +916,6 @@ charPredNames <- names(charPredictors)
 for (i in charPredNames)
         all[,i] <- as.factor(all[,i])
 ```
-
-
-### What next?
-
-For everything kept as factor until now, I will create dummy variables using one-hot encoding. If you read this far, you probably know how it works.
-
-
-
-
 
 ## Date predictors
 
@@ -939,7 +930,7 @@ There are 5 columns that represent date:
 I will combine YrSold and MoSold into date and plot the dependence of SalePrice from that date.
 
 ```{r}
-sold <- all[!is.na(all$SalePrice), c('MoSold', 'YrSold', 'SalePrice')]
+sold <- all[, c('MoSold', 'YrSold', 'SalePrice')]
 sold$DateSold <- ymd(paste(sold$YrSold,sold$MoSold,'01'))
 monthly <- sold %>% group_by(DateSold) %>% dplyr::summarise(MoMean=mean(SalePrice))
 
@@ -951,7 +942,7 @@ ggplot(data=sold, aes(x=DateSold, y=SalePrice)) +
 There is some seasonality in the lower edge of the plot (cheap houses), however the monthly median fluctuates around the same level it quite a noisy manner. Let's also plot median sales by year and by month (all years combined).
 
 ```{r}
-ys <- ggplot(data=all[!is.na(all$SalePrice),], aes(x=YrSold, y=SalePrice)) +
+ys <- ggplot(data=all[!is.na(all$SalePrice),], aes(x=as.factor(YrSold), y=SalePrice)) +
         stat_summary(fun = "median", geom = "bar", fill='steelblue') +
         scale_y_continuous(breaks= seq(0, 800000, by=50000), labels = comma) +
         coord_cartesian(ylim = c(100000, 200000))
@@ -959,18 +950,22 @@ ys <- ggplot(data=all[!is.na(all$SalePrice),], aes(x=YrSold, y=SalePrice)) +
 ms <- ggplot(data=all[!is.na(all$SalePrice),], aes(x=MoSold, y=SalePrice)) +
         stat_summary(fun = "median", geom = "bar", fill='steelblue') +
         scale_y_continuous(breaks= seq(0, 800000, by=50000), labels = comma) +
-        coord_cartesian(ylim = c(100000, 200000)) +
-        scale_x_continuous(breaks=seq(1,12, by=1))
+        coord_cartesian(ylim = c(100000, 200000)) 
 
 grid.arrange(ys, ms, nrow=1)        
 ```
 
-The order of years and months does not correspond to the order of median sale prices. It makes sense to convert both month and year sold to factors. YrSold can also be used to calculate the age of house at the moment of sale (starting feature engineering here although it is mostly done in the next chapter)
+The order of years and months does not correspond to the order of median sale prices, so 
+
+1. It makes sense to convert both month and year sold to factors. 
+2. YrSold can also be used to calculate the age of house at the moment of sale
+3. To avoid dealing with dates, but to preserve the continuity which is not obvious from YrSold and MoSold separetely (12/2008 is right between 11/2009 and 01/2009), I will create a new variable = number of months between Jan 2006 (earlierst sale) and the sale date.
 
 ```{r}
 all$MoSold <- as.factor(all$MoSold)
 all$Age <- all$YrSold - all$YearBuilt
 all$YrSold <- as.factor(all$YrSold)
+all$MoSince2006 <- interval(ymd('20060101' ), sold$DateSold) %/% months(1)
 ```
 
 # Features - deep dive
@@ -979,13 +974,90 @@ At this stage
 
 1. There are no NA
 2. All variables are either numeric or factor
-3. One feature was deleted (Utilities) and one created (Age)
+3. One feature was deleted (Utilities) and two created (Age and MoSince2006)
 
 Now I can vizualize correlations again to see if something changed, and also do some feature selection, using the factor variables as well.
 
-## Numeric features and correlations
+## Updated correlations for numeric features
+
+```{r}
+numericPredictors <- which(sapply(all, is.numeric))
+numericPredNames <- names(numericPredictors)
+cat('There are now', length(numericPredNames), 'numeric predictors instead of 37')
+all_numPred <- all[,numericPredictors]
+cor_matrix <- cor(all_numPred, use="pairwise.complete.obs")
+cor_sorted <- sort(cor_matrix[,'SalePrice'], decreasing=TRUE)
+cor_high <- names(which(sapply(cor_sorted, function(x) abs(x)>.5)))
+cor_matrix <- cor_matrix[cor_high, cor_high]
+corrplot.mixed(cor_matrix, tl.col='black', tl.pos='lt')
+```
+
+We also have 17 (instead of 10) predictors with absolute correlation >.5, including one with negative correlation (Age).
 
 ## Feature selection with boruta
+
+Boruta algorithm is designed to find important features when you have a mix of numerics and factors. The way it works is:
+
+1. Create shadow features - for each real feature, add one that is a random permutation of its values
+2. Fit a random forest based on this new, double width, data set
+3. Compare the importance (Z-score) of each feature with the importance of the best shadow (randomized) feature
+4. Repeat the process N times to get a distribution
+5. Split all features into three groups, depending whether their importance comes from the head, tail or middle of the distribution: confirmed, rejected and tentative.
+
+Boruta takes a while so placing it in a separate cached chunk.
+```{r cache=TRUE}
+boruta.fit <- Boruta(SalePrice~., data = all[!is.na(all$SalePrice),])
+```
+
+This is default boruta plot. Blue boxplots are min, avg and max Z-scores of shadow features. Red, yellow and green correspond to rejected, tentative and confirmed real features. As we have 80 of them, kinda hard to see, so I also saved the plot into a huge 4800x4800 px jpeg file.
+```{r}
+jpeg('boruta.jpeg', width=4800, height=4800)
+plot(boruta.fit)
+temp <- dev.off()
+plot(boruta.fit)
+```
+
+Here are top-30 features. Only six of them are categorical, everything else is numeric. Note that boruta produces different results compared to 100-tree random forest used in <a href="https://www.kaggle.com/erikbruin/house-prices-lasso-xgboost-and-a-detailed-eda">House prices: Lasso, XGBoost, and a detailed EDA</a>.
+
+```{r}
+# Final list of confirmed and tentative features
+b <- boruta.fit$finalDecision
+confirmed <- names(b[b == 'Confirmed'])
+tentative <- names(b[b == 'Tentative'])
+
+# Mean Z-scores for all features (81:83 are the shadows)
+feat_scores <- sort(apply(boruta.fit$ImpHistory[,1:80],2,mean), decreasing = TRUE)
+top30 <- data.frame(feature=names(feat_scores[1:30]), score=feat_scores[1:30])
+top30$type <- ifelse(top30$feature %in% numericPredNames, 'numeric', 'factor')
+ggplot(top30, aes(x=reorder(feature, score), y=score, fill=type)) + geom_bar(stat='identity') + coord_flip() + labs(y='Mean Z-score', x='Feature')
+```
+
+```{r echo=FALSE} 
+paste('There is a total of', length(confirmed), 'confirmed and', length(tentative), 'tentative features')
+```
+
+
+## Above ground footage
+
+Plotting the distributions of various above ground footage (square / linear) features, plus total rooms above ground as it is highly correlated with GrLivArea. Garage and basement appear below in separate sections.
+
+```{r}
+s1 <- ggplot(all, aes(x=GrLivArea)) + geom_density() + labs(x='Sq ft living area')
+s2 <- ggplot(all, aes(x=as.factor(TotRmsAbvGrd))) + geom_histogram(stat='count') + labs(x='Rooms above ground')
+s3 <- ggplot(all, aes(x=X1stFlrSF)) + geom_density() + labs(x='Sq ft 1st floor')
+s4 <- ggplot(all, aes(x=X2ndFlrSF)) + geom_density() + labs(x='Sq ft 2nd floor')
+s5 <- ggplot(all, aes(x=LotArea)) + geom_density() + labs(x='Lot area')
+s6 <- ggplot(all, aes(x=LotFrontage)) + geom_density() + labs(x='Lot frontage')
+
+
+grid.arrange(s1,s2,s3,s4,s5,s6, nrow=3)
+```
+
+## Plotting important categorical variables {.tabset}
+
+I will visualize the some of the most important categorical variables from the top-30 list above.
+
+### Garage type
 
 # Feature engineering
 
