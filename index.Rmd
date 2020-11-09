@@ -33,6 +33,7 @@ library(DMwR)
 library(gridExtra)
 library(lubridate)
 library(Boruta)
+library(bestNormalize)
 set.seed(1101)
 ```
 ```{r}
@@ -746,6 +747,10 @@ MSZoning is definitely a factor, but more than that, MSSubClass is too, although
 ```{r}
 all$MSSubClass <- as.factor(all$MSSubClass)
 all$MSZoning <- as.factor(all$MSZoning)
+
+#revalue MSSubClass for better readability
+all$MSSubClass<-revalue(all$MSSubClass, c('20'='1 story 1946+', '30'='1 story 1945-', '40'='1 story unf attic', '45'='1,5 story unf', '50'='1,5 story fin', '60'='2 story 1946+', '70'='2 story 1945-', '75'='2,5 story all ages', '80'='split/multi level', '85'='split foyer', '90'='duplex all style/age', '120'='1 story PUD 1946+', '150'='1,5 story PUD all', '160'='2 story PUD 1946+', '180'='PUD multilevel', '190'='2 family conversion'))
+
 ```
 
 ### Utilities
@@ -959,13 +964,11 @@ The order of years and months does not correspond to the order of median sale pr
 
 1. It makes sense to convert both month and year sold to factors. 
 2. YrSold can also be used to calculate the age of house at the moment of sale
-3. To avoid dealing with dates, but to preserve the continuity which is not obvious from YrSold and MoSold separetely (12/2008 is right between 11/2009 and 01/2009), I will create a new variable = number of months between Jan 2006 (earlierst sale) and the sale date.
 
 ```{r}
 all$MoSold <- as.factor(all$MoSold)
-all$Age <- all$YrSold - all$YearBuilt
+all$Age <- ifelse(all$YrSold - all$YearBuilt>0, all$YrSold - all$YearBuilt, 0)
 all$YrSold <- as.factor(all$YrSold)
-all$MoSince2006 <- interval(ymd('20060101' ), sold$DateSold) %/% months(1)
 ```
 
 # Features - deep dive
@@ -982,8 +985,6 @@ Now I can vizualize correlations again to see if something changed, and also do 
 
 ```{r}
 numericPredictors <- which(sapply(all, is.numeric))
-numericPredNames <- names(numericPredictors)
-cat('There are now', length(numericPredNames), 'numeric predictors instead of 37')
 all_numPred <- all[,numericPredictors]
 cor_matrix <- cor(all_numPred, use="pairwise.complete.obs")
 cor_sorted <- sort(cor_matrix[,'SalePrice'], decreasing=TRUE)
@@ -1037,30 +1038,242 @@ paste('There is a total of', length(confirmed), 'confirmed and', length(tentativ
 ```
 
 
-## Above ground footage
+## Plotting groups of features {.tabset}
 
-Plotting the distributions of various above ground footage (square / linear) features, plus total rooms above ground as it is highly correlated with GrLivArea. Garage and basement appear below in separate sections.
+In these tabs, I deal only with features from confirmed and tentative lists. It is already clear they are important in determining price, therefore I will just plot their distributions to see if some look like they can be exluded (correlated with each other or overly dominated by one category).
 
-```{r}
+### Above ground footage
+
+Plotting the distributions of various above ground footage (square / linear) features, plus total rooms above ground as it is highly correlated with GrLivArea. Garage and basement appear below in separate sections. All these variables are right skewed, will have to fix later, e.g. with a log().
+
+```{r message=FALSE}
+defaultW <- getOption("warn") 
+options(warn = -1)
 s1 <- ggplot(all, aes(x=GrLivArea)) + geom_density() + labs(x='Sq ft living area')
 s2 <- ggplot(all, aes(x=as.factor(TotRmsAbvGrd))) + geom_histogram(stat='count') + labs(x='Rooms above ground')
 s3 <- ggplot(all, aes(x=X1stFlrSF)) + geom_density() + labs(x='Sq ft 1st floor')
 s4 <- ggplot(all, aes(x=X2ndFlrSF)) + geom_density() + labs(x='Sq ft 2nd floor')
-s5 <- ggplot(all, aes(x=LotArea)) + geom_density() + labs(x='Lot area')
+s5 <- ggplot(all[all$LotArea<100000,], aes(x=LotArea)) + geom_density() + labs(x='Lot area')
 s6 <- ggplot(all, aes(x=LotFrontage)) + geom_density() + labs(x='Lot frontage')
 
 
 grid.arrange(s1,s2,s3,s4,s5,s6, nrow=3)
 ```
 
-## Plotting important categorical variables {.tabset}
+### Garage
 
-I will visualize the some of the most important categorical variables from the top-30 list above.
+7 garage features are in confirmed list: GarageArea, GarageCars, GarageCond, GarageFinish, GarageQual, GarageType, GarageYrBlt.
 
-### Garage type
+```{r}
+g1 <- ggplot(all, aes(x=GarageArea)) + geom_density() + labs(x='Garage area')
+g2 <- ggplot(all, aes(x=GarageCars)) + geom_bar(stat='count') + labs(x='Garage capacity')
+g3 <- ggplot(all, aes(x=as.factor(GarageCond))) + geom_bar(stat='count') + labs(x='Garage condition')
+g4 <- ggplot(all, aes(x=as.factor(GarageFinish))) + geom_bar(stat='count') + labs(x='Garage finish')
+g5 <- ggplot(all, aes(x=as.factor(GarageQual))) + geom_bar(stat='count') + labs(x='Garage quality')
+g6 <- ggplot(all, aes(x=as.factor(GarageType))) + geom_bar(stat='count') + labs(x='Garage type')
+g7 <- ggplot(all, aes(x=GarageYrBlt)) + geom_histogram(bins=30) + labs(x='Garage year') + scale_x_continuous(limits=c(1890, 2020))
 
-# Feature engineering
+grid.arrange(g1, g2, g3, g4, g5, g7, g6, ncol=2)
+```
 
-# Data preprocessing (feature selection, outliers, transformations)
+1. GarageArea correlates with GarageCars - keep just one
+2. Same for GarageCond and GarageQual, plus both are heavily dominated by level 3
+3. GarageYrBlt correlates with YearBuild
+
+Out of 7 features, I would keep 3: GarageArea, GarageType and GarageFinish (they are higher in boruta ranking).
+
+### Basement
+
+Similarly to garage, there are 11 basement variables, some of which may be discarded. BsmtFullBath, BsmtHalfBath are dealt with in feature engineering section together with all the bathrooms. Remaining 9 are plotted here.
+
+```{r}
+b1 <- ggplot(all, aes(x=TotalBsmtSF)) + geom_histogram(bins=30) + labs(x='Total basement SF') + scale_x_continuous(limits = c(0, 3000))
+b2 <- ggplot(all, aes(x=BsmtFinSF1)) + geom_histogram(bins=30) + labs(x='Type 1 finished SF') 
+b3 <- ggplot(all, aes(x=BsmtFinSF2)) + geom_histogram(bins=30) + labs(x='Type 2 finished SF')
+b4 <- ggplot(all, aes(x=BsmtUnfSF)) + geom_histogram(bins=30) + labs(x='Unfinished SF')
+b5 <- ggplot(all, aes(x=as.factor(BsmtQual))) + geom_bar(stat='count') + labs(x='Basement height')
+b6 <- ggplot(all, aes(x=as.factor(BsmtCond))) + geom_bar(stat='count') + labs(x='Basement condition')
+b7 <- ggplot(all, aes(x=as.factor(BsmtExposure))) + geom_bar(stat='count') + labs(x='Basement exposure')
+b8 <- ggplot(all, aes(x=as.factor(BsmtFinType1))) + geom_bar(stat='count') + labs(x='Rating of finished 1')
+b9 <- ggplot(all, aes(x=as.factor(BsmtFinType2))) + geom_bar(stat='count') + labs(x='Rating of finished 2')
+
+grid.arrange(b1, b2, b3, b4, b5, b6, b7, b8, b9, nrow=3)
+```
+
+```{r}
+cor(all$TotalBsmtSF, all$BsmtFinSF1+all$BsmtFinSF2+all$BsmtUnfSF)
+```
+TotalBsmtSF = BsmtFinSF1 + BsmtFinSF2 + BsmtUnfSF (exactly)
+
+### MSSubClass
+
+This is the most important categorical feature, according to boruta.
+
+```{r}
+
+c1 <- ggplot(all[!is.na(all$SalePrice),], aes(x=MSSubClass, y=SalePrice)) + geom_bar(stat='summary', fun='median', fill='steelblue') + theme(axis.text.x = element_text(angle=45, hjust=1)) + geom_label(stat='count', aes(label=..count.., y=..count..)) + ggtitle('Training set') + geom_hline(yintercept=163000, linetype="dashed", color = "red") #dashed line is median SalePrice
+
+c2 <- ggplot(all, aes(x=MSSubClass)) + geom_histogram(stat='count', fill='gray', bins=30) + theme(axis.text.x = element_text(angle=45, hjust=1)) + geom_label(stat='count', aes(label=..count.., y=..count..)) + ggtitle('All data')
+
+grid.arrange(c1, c2)
+options(warn = defaultW)
+```
+
+### Neighborhood
+
+### Quality variables
+
+```{r}
+
+```
+
+# Feature engineering: creation, selection, transformation
+
+Creating new features can be done in two ways:
+
+1. Create something intuitive, like Age that was created earlier
+2. Create powers (usually squares) and interaction terms (products for numeric variables, categories like "has a pool AND a garage" for factors).
+
+Before proceeding with the second part, I will have to drop redundant features to have less interaction terms and also to normalize (center and scale) the original features.
+
+## Intuitive features {.tabset}
+
+### Bathrooms
+
+Combining all the bathroom features together, counting halves as halves.
+```{r}
+all$TotalBath <- all$FullBath + .5 * all$HalfBath + all$BsmtFullBath + .5 * all$BsmtHalfBath
+with(all[!is.na(all$SalePrice),], cor(SalePrice, TotalBath))
+```
+New feature has .63 correlation with SalePrice. Compare with .5 for FullBath alone.
+
+### IsNew and IsRemodeled
+
+Some houses are completely new (YearBuilt=YrSold). Some have been remodeled.
+
+```{r}
+all$IsNew <- ifelse(all$YrSold==all$YearBuilt,1,0)
+all$IsRemodeled <- ifelse(all$YearRemodAdd==all$YearBuilt,0,1)
+
+i1 <- ggplot(all[!is.na(all$SalePrice),], aes(x=as.factor(IsNew), y=SalePrice)) + geom_bar(stat='summary', fun='median', fill='steelblue') + geom_label(stat='count', aes(label=..count.., y=..count..)) + geom_hline(yintercept=163000, linetype="dashed") #dashed line is median SalePrice 
+i2 <- ggplot(all[!is.na(all$SalePrice),], aes(x=as.factor(IsRemodeled), y=SalePrice)) + geom_bar(stat='summary', fun='median', fill='steelblue') + geom_label(stat='count', aes(label=..count.., y=..count..)) + geom_hline(yintercept=163000, linetype="dashed") #dashed line is median SalePrice 
+
+grid.arrange(i1, i2, nrow=1)
+```
+
+Who could've thought remodeling reduces the price of a house.
+
+### Binning neighborhood
+
+```{r}
+nb1 <- ggplot(all[!is.na(all$SalePrice),], aes(x=reorder(Neighborhood, SalePrice, FUN=median), y=SalePrice)) +
+        geom_bar(stat='summary', fun = "median", fill='steelblue') + labs(x='Neighborhood', y='Median SalePrice') +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        scale_y_continuous(breaks= seq(0, 800000, by=50000), labels = comma) +
+        geom_label(stat = "count", aes(label = ..count.., y = ..count..), size=3) +
+        geom_hline(yintercept=163000, linetype="dashed", color = "red") #dashed line is median SalePrice
+nb2 <- ggplot(all[!is.na(all$SalePrice),], aes(x=reorder(Neighborhood, SalePrice, FUN=mean), y=SalePrice)) +
+        geom_bar(stat='summary', fun = "mean", fill='steelblue') + labs(x='Neighborhood', y="Mean SalePrice") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        scale_y_continuous(breaks= seq(0, 800000, by=50000), labels = comma) +
+        geom_label(stat = "count", aes(label = ..count.., y = ..count..), size=3) +
+        geom_hline(yintercept=163000, linetype="dashed", color = "red") #dashed line is median SalePrice
+grid.arrange(nb1, nb2)
+```
+
+There are many way to bin them, one is like this:
+
+1. Those with price below mean/median
+2. Those with price above mean/median
+3. Three very expensive ones
+
+It is very convenient that mean and median produce very similar results here.
+
+```{r}
+all$NeighBin[all$Neighborhood %in% c('StoneBr', 'NridgHt', 'NoRidge')] <- 2
+all$NeighBin[all$Neighborhood %in% c('SawyerW', 'Gilbert', 'NWAmes', 'Blmngtn', 'CollgCr', 'ClearCr', 'Crawfor', 'Veenker', 'Somerst', 'Timber')] <- 1
+all$NeighBin[all$Neighborhood %in% c('MeadowV', 'IDOTRR', 'BrDale', 'OldTown', 'Edwards', 'BrkSide', 'Sawyer', 'Blueste', 'SWISU', 'NAmes', 'NPkVill', 'Mitchel')] <- 0
+table(all$NeighBin)
+```
+
+### Total square feet
+
+Analogous to total bathrooms, let's sum up total sq ft above and below ground.
+
+```{r}
+all$TotalSF <- all$GrLivArea + all$TotalBsmtSF
+with(all[!is.na(all$SalePrice),], cor(SalePrice, TotalSF))
+```
+Correlation of .78, not bad.
+
+## Removing stuff
+
+### Features
+
+1. Keep only features that are confirmed or tentative, according to boruta
+2. Remove features that are highly correlated with some other features (even if confirmed by boruta), based on the correlation table.
+```{r}
+all <- all[, names(all) %in% c(confirmed, tentative)]
+dropVars <- c('YearRemodAdd', 'GarageYrBlt', 'GarageArea', 'GarageCond', 'TotalBsmtSF', 'TotalRmsAbvGrd', 'BsmtFinSF1')
+all <- all[,!(names(all) %in% dropVars)]
+```
+51 predictor left.
+
+### Outliers
+
+Remove two outliers based on plot in 2.4.3 (big houses with low price).
+```{r}
+all <- all[-c(524, 1299),]
+```
+
+## Normalization and encoding
+
+I will split the data frame vertically into three: 
+
+1. True numeric (square footage, number of bathrooms etc) - need to be centered and scaled
+2. Ordinal categories (quality etc) - keep as is
+3. Non-ordinal categories (house type, neighbourhood etc) - one-hot encode
+
+```{r}
+# get all predictors of numeric type
+numerics <- names(which(sapply(all, is.numeric)))
+
+# manually list ordinals
+ordinals <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive')
+
+# remove ordinals from numerics
+numerics <- numerics[!(numerics %in% ordinals)]
+
+# get true unordered categories
+categorics <- names(all)
+categorics <- categorics[!(categorics %in% c(numerics, ordinals, 'SalePrice'))]
+
+# split data frame
+numerics <- all[,numerics]
+ordinals <- all[,ordinals]
+categorics <- all[,categorics]
+```
+
+### True numerics normalization
+
+**Skewness**
+
+Many features, just like SalePrice, are skewed (asymmetrical). Let's first find which ones have |skew|>.5
+```{r}
+skewed <- sapply(numerics, function(x) abs(skew(x))>.5)
+skewed <- names(skewed[skewed])
+skewed
+```
+
+Apply Box-Cox transformation to these features and check if it helped.
+```{r}
+for (i in skewed){
+        numerics[,i] <- bestNormalize::boxcox(numerics[,i]+1)$x.t
+}
+skewed <- sapply(numerics, function(x) abs(skew(x))>.5)
+skewed <- names(skewed[skewed])
+sapply(numerics[,skewed], skew)
+```
+There are still 3 features with |skew|>.5, but it's not too bad.
 
 # Modeling
