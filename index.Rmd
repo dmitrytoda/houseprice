@@ -1065,6 +1065,9 @@ grid.arrange(s1,s2,s3,s4,s5,s6, nrow=3)
 7 garage features are in confirmed list: GarageArea, GarageCars, GarageCond, GarageFinish, GarageQual, GarageType, GarageYrBlt.
 
 ```{r}
+#correct error
+all$GarageYrBlt[2593] <- 2007 #this must have been a typo. GarageYrBlt=2207, YearBuilt=2006, YearRemodAdd=2007.
+
 g1 <- ggplot(all, aes(x=GarageArea)) + geom_density() + labs(x='Garage area')
 g2 <- ggplot(all, aes(x=GarageCars)) + geom_bar(stat='count') + labs(x='Garage capacity')
 g3 <- ggplot(all, aes(x=as.factor(GarageCond))) + geom_bar(stat='count') + labs(x='Garage condition')
@@ -1213,7 +1216,7 @@ Correlation of .78, not bad.
 1. Keep only features that are confirmed or tentative, according to boruta
 2. Remove features that are highly correlated with some other features (even if confirmed by boruta), based on the correlation table.
 ```{r}
-all <- all[, names(all) %in% c(confirmed, tentative)]
+all <- all[, names(all) %in% c(confirmed, tentative, 'SalePrice')]
 dropVars <- c('YearRemodAdd', 'GarageYrBlt', 'GarageArea', 'GarageCond', 'TotalBsmtSF', 'TotalRmsAbvGrd', 'BsmtFinSF1')
 all <- all[,!(names(all) %in% dropVars)]
 ```
@@ -1232,7 +1235,7 @@ I will split the data frame vertically into three:
 
 1. True numeric (square footage, number of bathrooms etc) - need to be centered and scaled
 2. Ordinal categories (quality etc) - keep as is
-3. Non-ordinal categories (house type, neighbourhood etc) - one-hot encode
+3. Non-ordinal categories (house type, neighbourhood etc) - remove empty and almost-empty levels, one-hot encode
 
 ```{r}
 # get all predictors of numeric type
@@ -1242,7 +1245,7 @@ numerics <- names(which(sapply(all, is.numeric)))
 ordinals <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive')
 
 # remove ordinals from numerics
-numerics <- numerics[!(numerics %in% ordinals)]
+numerics <- numerics[!(numerics %in% c(ordinals, 'SalePrice'))]
 
 # get true unordered categories
 categorics <- names(all)
@@ -1276,4 +1279,187 @@ sapply(numerics[,skewed], skew)
 ```
 There are still 3 features with |skew|>.5, but it's not too bad.
 
+**Center and scale**
+
+For many machine learning algorithms to run properly, the features should have a mean of zero and similar scale. Usually they are scaled to be either from -1 to 1, or to have a variance of 1. preProcess function of caret package by default goes with the latter.
+
+```{r}
+preproc <- preProcess(numerics, method=c('center', 'scale'))
+numerics <- predict(preproc, numerics)
+```
+
+### True factors {.tabset}
+
+#### Remove almost-empty levels
+
+If some factor level is only present a few times in the train set, it only creates noise for predictions. This is not true for test set (if we trained for Level X on many examples, it will still be useful for predicting even a single record in the test set). Here I will remove levels that have 10 or less occurrences in the train set. Or rather, I will change them to mode for corresponding feature, because removing would create NAs. Note that in the original notebook, author first did one-hot encoding, then removed dummy variables with less than 1 ones. This is equivalent to tacitly reassigning those features to whatever level was taken by model.matrix() as reference level, which is not necessarily the mode.
+
+```{r}
+# not a very elegant code with a nested loop, but at least no surprise reassignments
+affected_features <- list()
+for (i in names(categorics)) { # for each categorical features
+        temp <- c()
+        for (j in levels(categorics[,i])) # for each level
+                if (sum(categorics[!is.na(all$SalePrice),i]==j) <= 10) { # only look at training set rows
+                        temp <- c(temp, j) # record the levels I'm removing
+                        categorics[categorics[,i]==j, i] <- names(sort(-table(categorics[,i])))[1] # replace with mode
+                }
+        
+        if (length(temp)>0) { # if removed any levels for this feature
+                affected_features[[length(affected_features)+1]] <- temp
+                names(affected_features)[length(affected_features)] <- i # record feature name
+        }        
+}
+print(affected_features)
+```
+
+#### One-hot encoding
+
+If you reached this section, you probably know what I'm doing and why.
+
+```{r}
+categorics <- as.data.frame(model.matrix(~.-1, categorics))
+```
+
+### Removing empty levels
+
+If some factor level is present only in train set, but not test set, or vice versa, it cannot be used for making predictions. Therefore checking, for train and test set separately, if any dummy variable consists of all zeroes, and removing those.
+
+```{r}
+# train set
+zeroColTrain <- which(colSums(categorics[!is.na(all$SalePrice),])==0)
+
+# test set
+zeroColTest <- which(colSums(categorics[is.na(all$SalePrice),])==0)
+
+# removing both together
+categorics <- categorics[,-c(zeroColTrain, zeroColTest)]
+```
+
+## Square and interaction features
+
+For all **true numeric features**, I will create 
+
+1. Square features
+2. Interaction terms (pair-wise products)
+
+For all **non-ordered categories**, I will create interaction terms with a logical AND (e.g. is new and has a pool) which is same as multiplication for dummy variables. As a side effect, it will create a bunch of all-zero columns (all the conjunctions of different levels of the same features), which I will remove.
+
+All the **ordered categories** are better left alone - no sense in squaring or multiplying them by each other.
+
+This whole shebang may lead to overfitting but hopefully regularization will be able to deal with it.
+
+
+
+```{r}
+cuadratics <- sapply(numerics, function(x) x^2)
+colnames(cuadratics) <- paste(colnames(numerics), '-sq', sep = '')
+num_interactions <- model.matrix(~.^2-1, numerics)
+cat_interactions <- model.matrix(~.^2-1, categorics)
+zeroColInterac <- which(colSums(cat_interactions)==0)
+cat_interactions <- cat_interactions[,-zeroColInterac]
+```
+
+## Un-skewing SalePrice
+
+Just like with numeric predictors, SalePrice should be un-skewed. No need for Box-Cox here, a simple logarithm will be enough. No centering or scaling either, and then after prediction I will only have to exponentiate it to get price in dollars.
+
+```{r}
+skew(all$SalePrice)
+qqnorm(all$SalePrice)
+qqline(all$SalePrice)
+```
+
+A skew of 1.88 and obvious curve on the normal Q-Q plot. Let's fix and check again.
+
+```{r}
+all$SalePrice <- log(all$SalePrice) # all prices are >0 so no +1 is needed
+skew(all$SalePrice)
+qqnorm(all$SalePrice)
+qqline(all$SalePrice)
+```
+
+A skew of .12 and almost a straight line, so SalePrice is now normally distributed (although it is not a standard normal of course).
+
+## Re-assembling train and test sets
+
+I have a bunch of vertically sliced data frames now:
+
+1. numerics, ordinals and categorics contain the original features (preprocessed and encoded)
+2. cuadratics, num_interactions and cat_interactions contain squares and interactions
+3. SalePrice is still a column in all, which has vertically stacked train and test sets (as do all other data frames in pp. 1-2)
+
+I will combine them vertically, then split back into train and test horizontally.
+
+```{r}
+combined <- cbind(numerics, ordinals, categorics, cuadratics, num_interactions, cat_interactions)
+train1 <- combined[!is.na(all$SalePrice),]
+test1 <- combined[is.na(all$SalePrice),]
+dim(train1)
+```
+
+3182 features! I better leave them models to train overnight.
+
 # Modeling
+
+## Lasso
+
+Lasso is just another name for linear regression with L1 regularization. Its cost function is
+![Lasso cost function](lasso_cost.png)
+Here Y is the vector of responses, X is the matrix of predictors, Theta is vector of parameters, and lambda is our only hyperparameter. Caret has a function to tune lambda using cross-validation.
+
+```{r}
+set.seed(11092020)
+
+# tuning with 5-fold cross-validation, will be reused for later models
+my_control <- trainControl(method='cv', number=5)
+
+# these are values of lambda to try; expand.grid just creates all combinations of alpha and labda, alpha being another hyperparameter that lasso does not use, therefore setting to 1
+lassoGrid <- expand.grid(alpha = 1, lambda = seq(0.001,0.1,by = 0.0005))
+
+# This will train several models with different lambdas and tell which one gives least RMSE
+lasso_mod <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='glmnet', trControl= my_control, tuneGrid=lassoGrid)
+lasso_mod$bestTune
+min(lasso_mod$results$RMSE) # using log(SalePrice) just like kaggle
+```
+
+It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 3182 features were used.
+
+```{r}
+lassoVarImp <- varImp(lasso_mod, scale=FALSE) # for GLM, varImp will return all the coefficients (absolute values) in a special object
+lassoImportance <- lassoVarImp$importance # same coefficients but as a simple data frame with one column
+varsSelected <- length(which(lassoImportance$Overall!=0))
+varsDiscarded <- length(which(lassoImportance$Overall==0))
+paste(varsSelected, 'features selected and', varsDiscarded, 'discarded by lasso')
+```
+
+Make a prediction and submit
+```{r}
+lasso_pred <- exp(predict(lasso_mod, test1))
+submit <- data.frame('Id'=test_Ids, 'SalePrice'=lasso_pred)
+write.csv(submit, 'lasso.csv', row.names = FALSE)
+```
+
+Leader board score of 0.12839 with lasso alone.
+
+## XGBoost
+
+XGBoost or extreme gradient boosting is one of the many boosted tree algorithms. It first trains a decision tree, then trains another one to correct the errors of the first one, and so on: a forest but not a random one. There are a few hyperparameters here that can be tuned with caret package again.
+
+```{r}
+xgb_grid = expand.grid(
+nrounds = 1000, # number of boosting rounds = number of trees
+eta = c(0.1, 0.05, 0.01), # learning rate
+max_depth = c(2, 3, 4, 5, 6), # max depth of a tree; the deeper the tree, the more prone to overfitting
+gamma = 0, # minimal reduction of cost function at which a node is split
+colsample_bytree=1,
+min_child_weight=c(1, 2, 3, 4 ,5),
+subsample=1
+)
+```
+
+```{r cache=TRUE}
+xgb_caret <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
+xgb_caret$bestTune
+```
+
