@@ -34,6 +34,7 @@ library(gridExtra)
 library(lubridate)
 library(Boruta)
 library(bestNormalize)
+library(xgboost)
 set.seed(1101)
 ```
 ```{r}
@@ -1392,9 +1393,9 @@ I have a bunch of vertically sliced data frames now:
 I will combine them vertically, then split back into train and test horizontally.
 
 ```{r}
-combined <- cbind(numerics, ordinals, categorics, cuadratics, num_interactions, cat_interactions)
-train1 <- combined[!is.na(all$SalePrice),]
-test1 <- combined[is.na(all$SalePrice),]
+combined1 <- cbind(numerics, ordinals, categorics, cuadratics, num_interactions, cat_interactions)
+train1 <- combined1[!is.na(all$SalePrice),]
+test1 <- combined1[is.na(all$SalePrice),]
 dim(train1)
 ```
 
@@ -1458,8 +1459,66 @@ subsample=1
 )
 ```
 
-```{r cache=TRUE}
+### Including quadratic and interaction terms - bad performance
+<details>
+  <summary>Click to expand!</summary>
+
+This code is disabled as it takes a few hours on my laptop. The results are below.
+```{r cache=TRUE, eval=FALSE}
 xgb_caret <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
 xgb_caret$bestTune
 ```
 
+Best tune parameters:
+
+- nrounds = 1000
+- max_depth = 4
+- eta = 0.05
+- gamma = 0
+- colsample_bytree = 1
+- min_child_weight = 3
+- subsample = 1
+
+However, caret optimization was run holding nrounds constant at 1000. It makes sense now to fix all other parameters to what caret produced, and tune the nrounds. This is done using native XGBoost interface, without caret.
+
+```{r}
+default_param<-list(
+        objective = "reg:linear",
+        booster = "gbtree",
+        eta=0.05, #default = 0.3
+        gamma=0,
+        max_depth=4, #default=6
+        min_child_weight=3, #default=1
+        subsample=1,
+        colsample_bytree=1
+)
+
+# put our testing & training data into two seperates Dmatrixs objects
+dtrain <- xgb.DMatrix(data = as.matrix(train1), label= all$SalePrice[!is.na(all$SalePrice)])
+dtest <- xgb.DMatrix(data = as.matrix(test1))
+```
+
+```{r}
+set.seed(11102020)
+# train a model using caret parameters, with up to 1000
+xgbcv <- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold = 5, showsd = T, stratified = T, print_every_n = 50, early_stopping_rounds = 10, maximize = F)
+```
+
+CV RMSE of XGBoost is 0.126278, which is significantly worse than 0.116289 reported by Erik in his original notebook. Looks like my quadratic features and/or interaction terms are not helping. Let's try again wihtouh them.
+
+</details>
+
+### Without quadratic and interaction terms
+
+```{r}
+combined2 <- cbind(numerics, ordinals, categorics)
+train2 <- combined2[!is.na(all$SalePrice),]
+test2 <- combined2[is.na(all$SalePrice),]
+dim(train2)
+```
+Only 127 features.
+
+```{r cache=TRUE, eval=FALSE}
+xgb_caret <- train(x=train2, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
+xgb_caret$bestTune
+```
