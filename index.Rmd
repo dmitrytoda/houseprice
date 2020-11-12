@@ -1411,16 +1411,22 @@ paste(varsSelected, 'features selected and', varsDiscarded, 'discarded by lasso'
 Make a prediction and submit
 ```{r}
 lasso_pred <- exp(predict(lasso_mod, test1))
-submit <- data.frame('Id'=test_Ids, 'SalePrice'=lasso_pred)
-write.csv(submit, 'lasso181.csv', row.names = FALSE)
+lasso_submit <- data.frame('Id'=test_Ids, 'SalePrice'=lasso_pred)
+write.csv(lasso_submit, 'lasso181.csv', row.names = FALSE)
 ```
 
 Leader board score of 0.12336 with lasso alone.
 
 ## XGBoost
 
-XGBoost or extreme gradient boosting is one of the many boosted tree algorithms. It first trains a decision tree, then trains another one to correct the errors of the first one, and so on: a forest but not a random one. There are a few hyperparameters here that can be tuned with caret package again.
+XGBoost or extreme gradient boosting is one of the many boosted tree algorithms. It first trains a decision tree, then trains another one to correct the errors of the first one, and so on: a forest but not a random one. 
+Getting a final trained model will be a three-step process:
 
+1. Create a search grid to find the best eta, max_depth and min_child_weight for a given large number of trees (1000), using caret
+2. Use parameters from step 1 to find the optimal number of trees (it will likely be below 1000)
+3. Train a final model using all parameters from steps 1-2 and make a prediction
+
+### Find best parameters
 ```{r}
 xgb_grid = expand.grid(
 nrounds = 1000, # number of boosting rounds = number of trees
@@ -1435,6 +1441,73 @@ subsample=1
 
 Finding best hyperparameters with caret.
 ```{r cache=TRUE, eval=FALSE}
-xgb_caret <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
+# xgb_caret <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
 xgb_caret$bestTune
 ```
+
+- max_depth 3
+- eta 0.05
+- min_child_weight 4
+
+### Find number of trees
+Using native XGBoost interface here
+
+```{r}
+# put our testing & training data into two seperates Dmatrixs objects
+dtrain <- xgb.DMatrix(data = as.matrix(train1), label= all$SalePrice[!is.na(all$SalePrice)])
+dtest <- xgb.DMatrix(data = as.matrix(test1))
+
+# use best hyperparameters from Step 1
+default_param<-list(
+        objective = "reg:linear",
+        booster = "gbtree",
+        eta=0.05, #default = 0.3
+        gamma=0,
+        max_depth=3, #default=6
+        min_child_weight=4, #default=1
+        subsample=1,
+        colsample_bytree=1
+)
+```
+
+The next step is to do cross validation to determine the best number of rounds (trees) (for the given set of parameters). 
+
+```{r}
+xgbcv <- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold = 5, showsd = T, stratified = T, print_every_n = 50, early_stopping_rounds = 10, maximize = F)
+```
+
+Best iteration: 
+
+* 401 trees
+* train-rmse:0.068853
+* test-rmse:0.117671
+
+### Train final model and make prediction
+```{r}
+#train the model using the best iteration found by cross validation
+xgb_mod <- xgb.train(data = dtrain, params=default_param, nrounds=401)
+```
+
+```{r}
+xgb_pred <- exp(predict(xgb_mod, dtest)) #need to reverse the log to the real values
+xgb_submit <- data.frame('Id'=test_Ids, 'SalePrice'=xgb_pred)
+write.csv(xgb_submit, 'xgb.csv', row.names = FALSE)
+```
+
+Leader board score of 0.12742, slighly worse than Lasso.
+
+## Averaging predictions
+
+* Lasso 
+        + CV RMSE = 0.1121649
+        + LB RMSE = 0.12336
+* XGBoost
+        + CV RMSE = 0.117671
+        + LB RMSE = 0.12742
+        
+```{r}
+las_xgb_submit <- data.frame('Id'=test_Ids, 'SalePrice'=(lasso_pred+xgb_pred)/2)
+write.csv(las_xgb_submit, 'lasso_xgb.csv', row.names = FALSE)
+```
+
+LB score of 0.12195, better than both Lasso and XGB by themselves.
