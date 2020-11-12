@@ -1023,9 +1023,9 @@ Here are top-30 features. Only six of them are categorical, everything else is n
 
 ```{r}
 # Final list of confirmed and tentative features
-b <- boruta.fit$finalDecision
-confirmed <- names(b[b == 'Confirmed'])
-tentative <- names(b[b == 'Tentative'])
+# b <- boruta.fit$finalDecision
+# confirmed <- names(b[b == 'Confirmed'])
+# tentative <- names(b[b == 'Tentative'])
 
 # Mean Z-scores for all features (81:83 are the shadows)
 feat_scores <- sort(apply(boruta.fit$ImpHistory[,1:80],2,mean), decreasing = TRUE)
@@ -1133,14 +1133,14 @@ options(warn = defaultW)
 
 # Feature engineering: creation, selection, transformation
 
-Creating new features can be done in two ways:
+In this section, I will
+1. Create more features, like Age that was created earlier
+2. Drop some features
+3. Normalize (center, skale and unskew) features
 
-1. Create something intuitive, like Age that was created earlier
-2. Create powers (usually squares) and interaction terms (products for numeric variables, categories like "has a pool AND a garage" for factors).
+I have also tried adding square and interaction terms (products for numeric variables, categories like "has a pool AND a garage" for factors), but it did not work out very well.
 
-Before proceeding with the second part, I will have to drop redundant features to have less interaction terms and also to normalize (center and scale) the original features.
-
-## Intuitive features {.tabset}
+## Creating features {.tabset}
 
 ### Bathrooms
 
@@ -1214,14 +1214,14 @@ Correlation of .78, not bad.
 
 ### Features
 
-1. Keep only features that are confirmed or tentative, according to boruta
-2. Remove features that are highly correlated with some other features (even if confirmed by boruta), based on the correlation table.
+Remove features that are highly correlated with some other features, based on the correlation table.
 ```{r}
-all <- all[, names(all) %in% c(confirmed, tentative, 'SalePrice')]
+# all <- all[, names(all) %in% c(confirmed, tentative, 'SalePrice')]
 dropVars <- c('YearRemodAdd', 'GarageYrBlt', 'GarageArea', 'GarageCond', 'TotalBsmtSF', 'TotalRmsAbvGrd', 'BsmtFinSF1')
 all <- all[,!(names(all) %in% dropVars)]
+dim(all)
 ```
-51 predictor left.
+78 predictors left.
 
 ### Outliers
 
@@ -1268,8 +1268,7 @@ skewed <- sapply(numerics, function(x) abs(skew(x))>.5)
 skewed <- names(skewed[skewed])
 skewed
 ```
-
-Apply Box-Cox transformation to these features and check if it helped.
+29 skewed features. Apply Box-Cox transformation to these features and check if it helped.
 ```{r}
 for (i in skewed){
         numerics[,i] <- bestNormalize::boxcox(numerics[,i]+1)$x.t
@@ -1278,7 +1277,7 @@ skewed <- sapply(numerics, function(x) abs(skew(x))>.5)
 skewed <- names(skewed[skewed])
 sapply(numerics[,skewed], skew)
 ```
-There are still 3 features with |skew|>.5, but it's not too bad.
+There now 13 features with |skew|>.5 instead of 29. <span style="color: red;">This can definitely be improved</span>, but let's see, maybe it will work good enough like this.
 
 **Center and scale**
 
@@ -1337,30 +1336,6 @@ zeroColTest <- which(colSums(categorics[is.na(all$SalePrice),])==0)
 categorics <- categorics[,-c(zeroColTrain, zeroColTest)]
 ```
 
-## Square and interaction features
-
-For all **true numeric features**, I will create 
-
-1. Square features
-2. Interaction terms (pair-wise products)
-
-For all **non-ordered categories**, I will create interaction terms with a logical AND (e.g. is new and has a pool) which is same as multiplication for dummy variables. As a side effect, it will create a bunch of all-zero columns (all the conjunctions of different levels of the same features), which I will remove.
-
-All the **ordered categories** are better left alone - no sense in squaring or multiplying them by each other.
-
-This whole shebang may lead to overfitting but hopefully regularization will be able to deal with it.
-
-
-
-```{r}
-cuadratics <- sapply(numerics, function(x) x^2)
-colnames(cuadratics) <- paste(colnames(numerics), '-sq', sep = '')
-num_interactions <- model.matrix(~.^2-1, numerics)
-cat_interactions <- model.matrix(~.^2-1, categorics)
-zeroColInterac <- which(colSums(cat_interactions)==0)
-cat_interactions <- cat_interactions[,-zeroColInterac]
-```
-
 ## Un-skewing SalePrice
 
 Just like with numeric predictors, SalePrice should be un-skewed. No need for Box-Cox here, a simple logarithm will be enough. No centering or scaling either, and then after prediction I will only have to exponentiate it to get price in dollars.
@@ -1387,19 +1362,18 @@ A skew of .12 and almost a straight line, so SalePrice is now normally distribut
 I have a bunch of vertically sliced data frames now:
 
 1. numerics, ordinals and categorics contain the original features (preprocessed and encoded)
-2. cuadratics, num_interactions and cat_interactions contain squares and interactions
-3. SalePrice is still a column in all, which has vertically stacked train and test sets (as do all other data frames in pp. 1-2)
+2. SalePrice is still a column in all, which has vertically stacked train and test sets (as do all other data frames in pp. 1-2)
 
 I will combine them vertically, then split back into train and test horizontally.
 
 ```{r}
-combined1 <- cbind(numerics, ordinals, categorics, cuadratics, num_interactions, cat_interactions)
+combined1 <- cbind(numerics, ordinals, categorics)
 train1 <- combined1[!is.na(all$SalePrice),]
 test1 <- combined1[is.na(all$SalePrice),]
 dim(train1)
 ```
 
-3182 features! I better leave them models to train overnight.
+181 features.
 
 # Modeling
 
@@ -1410,7 +1384,7 @@ Lasso is just another name for linear regression with L1 regularization. Its cos
 Here Y is the vector of responses, X is the matrix of predictors, Theta is vector of parameters, and lambda is our only hyperparameter. Caret has a function to tune lambda using cross-validation.
 
 ```{r}
-set.seed(11092020)
+set.seed(27042018)
 
 # tuning with 5-fold cross-validation, will be reused for later models
 my_control <- trainControl(method='cv', number=5)
@@ -1424,7 +1398,7 @@ lasso_mod$bestTune
 min(lasso_mod$results$RMSE) # using log(SalePrice) just like kaggle
 ```
 
-It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 3182 features were used.
+It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 181 features were used.
 
 ```{r}
 lassoVarImp <- varImp(lasso_mod, scale=FALSE) # for GLM, varImp will return all the coefficients (absolute values) in a special object
@@ -1438,10 +1412,10 @@ Make a prediction and submit
 ```{r}
 lasso_pred <- exp(predict(lasso_mod, test1))
 submit <- data.frame('Id'=test_Ids, 'SalePrice'=lasso_pred)
-write.csv(submit, 'lasso.csv', row.names = FALSE)
+write.csv(submit, 'lasso181.csv', row.names = FALSE)
 ```
 
-Leader board score of 0.12839 with lasso alone.
+Leader board score of 0.12336 with lasso alone.
 
 ## XGBoost
 
@@ -1459,66 +1433,8 @@ subsample=1
 )
 ```
 
-### Including quadratic and interaction terms - bad performance
-<details>
-  <summary>Click to expand!</summary>
-
-This code is disabled as it takes a few hours on my laptop. The results are below.
+Finding best hyperparameters with caret.
 ```{r cache=TRUE, eval=FALSE}
 xgb_caret <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
-xgb_caret$bestTune
-```
-
-Best tune parameters:
-
-- nrounds = 1000
-- max_depth = 4
-- eta = 0.05
-- gamma = 0
-- colsample_bytree = 1
-- min_child_weight = 3
-- subsample = 1
-
-However, caret optimization was run holding nrounds constant at 1000. It makes sense now to fix all other parameters to what caret produced, and tune the nrounds. This is done using native XGBoost interface, without caret.
-
-```{r}
-default_param<-list(
-        objective = "reg:linear",
-        booster = "gbtree",
-        eta=0.05, #default = 0.3
-        gamma=0,
-        max_depth=4, #default=6
-        min_child_weight=3, #default=1
-        subsample=1,
-        colsample_bytree=1
-)
-
-# put our testing & training data into two seperates Dmatrixs objects
-dtrain <- xgb.DMatrix(data = as.matrix(train1), label= all$SalePrice[!is.na(all$SalePrice)])
-dtest <- xgb.DMatrix(data = as.matrix(test1))
-```
-
-```{r}
-set.seed(11102020)
-# train a model using caret parameters, with up to 1000
-xgbcv <- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold = 5, showsd = T, stratified = T, print_every_n = 50, early_stopping_rounds = 10, maximize = F)
-```
-
-CV RMSE of XGBoost is 0.126278, which is significantly worse than 0.116289 reported by Erik in his original notebook. Looks like my quadratic features and/or interaction terms are not helping. Let's try again wihtouh them.
-
-</details>
-
-### Without quadratic and interaction terms
-
-```{r}
-combined2 <- cbind(numerics, ordinals, categorics)
-train2 <- combined2[!is.na(all$SalePrice),]
-test2 <- combined2[is.na(all$SalePrice),]
-dim(train2)
-```
-Only 127 features.
-
-```{r cache=TRUE, eval=FALSE}
-xgb_caret <- train(x=train2, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
 xgb_caret$bestTune
 ```

@@ -442,6 +442,7 @@ summary {
 <li><a href="#lasso"><span class="toc-section-number">6.1</span> Lasso</a></li>
 <li><a href="#xgboost"><span class="toc-section-number">6.2</span> XGBoost</a><ul>
 <li><a href="#including-quadratic-and-interaction-terms---bad-performance"><span class="toc-section-number">6.2.1</span> Including quadratic and interaction terms - bad performance</a></li>
+<li><a href="#without-quadratic-and-interaction-terms"><span class="toc-section-number">6.2.2</span> Without quadratic and interaction terms</a></li>
 </ul></li>
 </ul></li>
 </ul>
@@ -1666,9 +1667,9 @@ qqline(all$SalePrice)</code></pre>
 <li>SalePrice is still a column in all, which has vertically stacked train and test sets (as do all other data frames in pp. 1-2)</li>
 </ol>
 <p>I will combine them vertically, then split back into train and test horizontally.</p>
-<pre class="r"><code>combined &lt;- cbind(numerics, ordinals, categorics, cuadratics, num_interactions, cat_interactions)
-train1 &lt;- combined[!is.na(all$SalePrice),]
-test1 &lt;- combined[is.na(all$SalePrice),]
+<pre class="r"><code>combined1 &lt;- cbind(numerics, ordinals, categorics, cuadratics, num_interactions, cat_interactions)
+train1 &lt;- combined1[!is.na(all$SalePrice),]
+test1 &lt;- combined1[is.na(all$SalePrice),]
 dim(train1)</code></pre>
 <pre><code>## [1] 1458 3182</code></pre>
 <p>3182 features! I better leave them models to train overnight.</p>
@@ -1710,10 +1711,6 @@ write.csv(submit, &#39;lasso.csv&#39;, row.names = FALSE)</code></pre>
 <div id="xgboost" class="section level2">
 <h2><span class="header-section-number">6.2</span> XGBoost</h2>
 <p>XGBoost or extreme gradient boosting is one of the many boosted tree algorithms. It first trains a decision tree, then trains another one to correct the errors of the first one, and so on: a forest but not a random one. There are a few hyperparameters here that can be tuned with caret package again.</p>
-<div id="including-quadratic-and-interaction-terms---bad-performance" class="section level3">
-<h3><span class="header-section-number">6.2.1</span> Including quadratic and interaction terms - bad performance</h3>
-<details>
-<p><summary>Click to expand!</summary></p>
 <pre class="r"><code>xgb_grid = expand.grid(
 nrounds = 1000, # number of boosting rounds = number of trees
 eta = c(0.1, 0.05, 0.01), # learning rate
@@ -1723,6 +1720,10 @@ colsample_bytree=1,
 min_child_weight=c(1, 2, 3, 4 ,5),
 subsample=1
 )</code></pre>
+<div id="including-quadratic-and-interaction-terms---bad-performance" class="section level3">
+<h3><span class="header-section-number">6.2.1</span> Including quadratic and interaction terms - bad performance</h3>
+<details>
+<p><summary>Click to expand!</summary></p>
 <p>This code is disabled as it takes a few hours on my laptop. The results are below.</p>
 <pre class="r"><code>xgb_caret &lt;- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method=&#39;xgbTree&#39;, trControl= my_control, tuneGrid=xgb_grid) 
 xgb_caret$bestTune</code></pre>
@@ -1754,11 +1755,11 @@ dtest &lt;- xgb.DMatrix(data = as.matrix(test1))</code></pre>
 <pre class="r"><code>set.seed(11102020)
 # train a model using caret parameters, with up to 1000
 xgbcv &lt;- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold = 5, showsd = T, stratified = T, print_every_n = 50, early_stopping_rounds = 10, maximize = F)</code></pre>
-<pre><code>## [09:17:38] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
-## [09:17:38] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
-## [09:17:38] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
-## [09:17:38] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
-## [09:17:38] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
+<pre><code>## [10:48:50] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
+## [10:48:50] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
+## [10:48:50] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
+## [10:48:50] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
+## [10:48:50] WARNING: amalgamation/../src/objective/regression_obj.cu:174: reg:linear is now deprecated in favor of reg:squarederror.
 ## [1]  train-rmse:10.955599+0.004540   test-rmse:10.955734+0.019200 
 ## Multiple eval metrics are present. Will use test_rmse for early stopping.
 ## Will train until test_rmse hasn&#39;t improved in 10 rounds.
@@ -1773,6 +1774,17 @@ xgbcv &lt;- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold
 ## [305]    train-rmse:0.053441+0.001638    test-rmse:0.126278+0.010162</code></pre>
 <p>CV RMSE of XGBoost is 0.126278, which is significantly worse than 0.116289 reported by Erik in his original notebook. Looks like my quadratic features and/or interaction terms are not helping. Let’s try again wihtouh them.</p>
 </details>
+</div>
+<div id="without-quadratic-and-interaction-terms" class="section level3">
+<h3><span class="header-section-number">6.2.2</span> Without quadratic and interaction terms</h3>
+<pre class="r"><code>combined2 &lt;- cbind(numerics, ordinals, categorics)
+train2 &lt;- combined2[!is.na(all$SalePrice),]
+test2 &lt;- combined2[is.na(all$SalePrice),]
+dim(train2)</code></pre>
+<pre><code>## [1] 1458  127</code></pre>
+<p>Only 127 features.</p>
+<pre class="r"><code>xgb_caret &lt;- train(x=train2, y=all$SalePrice[!is.na(all$SalePrice)], method=&#39;xgbTree&#39;, trControl= my_control, tuneGrid=xgb_grid) 
+xgb_caret$bestTune</code></pre>
 </div>
 </div>
 </div>
