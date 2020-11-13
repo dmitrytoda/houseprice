@@ -1232,29 +1232,30 @@ all <- all[-c(524, 1299),]
 
 ## Normalization and encoding
 
-I will split the data frame vertically into three: 
+I will split the data frame vertically into two: 
 
 1. True numeric (square footage, number of bathrooms etc) - need to be centered and scaled
-2. Ordinal categories (quality etc) - keep as is
-3. Non-ordinal categories (house type, neighbourhood etc) - remove empty and almost-empty levels, one-hot encode
+2. Category variables (including ordinal and non-ordinal):
+        + no centering or scaling
+        + remove empty and almost-empty levels
+        + for non-ordinal only, one-hot encode
 
 ```{r}
 # get all predictors of numeric type
 numerics <- names(which(sapply(all, is.numeric)))
 
 # manually list ordinals
-ordinals <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive')
+ordinal_names <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive')
 
 # remove ordinals from numerics
-numerics <- numerics[!(numerics %in% c(ordinals, 'SalePrice'))]
+numerics <- numerics[!(numerics %in% c(ordinal_names, 'SalePrice'))]
 
 # get true unordered categories
 categorics <- names(all)
-categorics <- categorics[!(categorics %in% c(numerics, ordinals, 'SalePrice'))]
+categorics <- categorics[!(categorics %in% c(numerics, 'SalePrice'))]
 
 # split data frame
 numerics <- all[,numerics]
-ordinals <- all[,ordinals]
 categorics <- all[,categorics]
 ```
 
@@ -1321,19 +1322,20 @@ If you reached this section, you probably know what I'm doing and why.
 categorics <- as.data.frame(model.matrix(~.-1, categorics))
 ```
 
-### Removing empty levels
+### Removing zero variance and empty levels
 
-If some factor level is present only in train set, but not test set, or vice versa, it cannot be used for making predictions. Therefore checking, for train and test set separately, if any dummy variable consists of all zeroes, and removing those.
+1. For train set, if some categoric feature has 0 variance, it is useless for prediction.
+2. For test set, if some dummy variable contains all zeros, it means this level is empty, and even if we have in train set, it is also useless. 
 
 ```{r}
-# train set
-zeroColTrain <- which(colSums(categorics[!is.na(all$SalePrice),])==0)
+# train set - remove zero variance
+zeroVarTrain <- which(sapply(categorics[!is.na(all$SalePrice),], var)==0)
 
-# test set
+# test set - remove all-zero columns (all-one or all-some-ordinal-level may still be useful)
 zeroColTest <- which(colSums(categorics[is.na(all$SalePrice),])==0)
 
 # removing both together
-categorics <- categorics[,-c(zeroColTrain, zeroColTest)]
+categorics <- categorics[,-c(zeroVarTrain, zeroColTest)]
 ```
 
 ## Un-skewing SalePrice
@@ -1367,13 +1369,13 @@ I have a bunch of vertically sliced data frames now:
 I will combine them vertically, then split back into train and test horizontally.
 
 ```{r}
-combined1 <- cbind(numerics, ordinals, categorics)
+combined1 <- cbind(numerics, categorics)
 train1 <- combined1[!is.na(all$SalePrice),]
 test1 <- combined1[is.na(all$SalePrice),]
 dim(train1)
 ```
 
-181 features.
+179 features.
 
 # Modeling
 
@@ -1398,7 +1400,7 @@ lasso_mod$bestTune
 min(lasso_mod$results$RMSE) # using log(SalePrice) just like kaggle
 ```
 
-It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 181 features were used.
+It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 179 features were used.
 
 ```{r}
 lassoVarImp <- varImp(lasso_mod, scale=FALSE) # for GLM, varImp will return all the coefficients (absolute values) in a special object
@@ -1408,14 +1410,10 @@ varsDiscarded <- length(which(lassoImportance$Overall==0))
 paste(varsSelected, 'features selected and', varsDiscarded, 'discarded by lasso')
 ```
 
-Make a prediction and submit
+Make prediction
 ```{r}
 lasso_pred <- exp(predict(lasso_mod, test1))
-lasso_submit <- data.frame('Id'=test_Ids, 'SalePrice'=lasso_pred)
-write.csv(lasso_submit, 'lasso181.csv', row.names = FALSE)
 ```
-
-Leader board score of 0.12336 with lasso alone.
 
 ## XGBoost
 
@@ -1459,7 +1457,7 @@ dtest <- xgb.DMatrix(data = as.matrix(test1))
 
 # use best hyperparameters from Step 1
 default_param<-list(
-        objective = "reg:linear",
+        objective = "reg:squarederror",
         booster = "gbtree",
         eta=0.05, #default = 0.3
         gamma=0,
@@ -1473,41 +1471,32 @@ default_param<-list(
 The next step is to do cross validation to determine the best number of rounds (trees) (for the given set of parameters). 
 
 ```{r}
-xgbcv <- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold = 5, showsd = T, stratified = T, print_every_n = 50, early_stopping_rounds = 10, maximize = F)
+set.seed(11132020)
+xgbcv <- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold = 10, showsd = T, stratified = T, print_every_n = 50, early_stopping_rounds = 10, maximize = F)
 ```
 
 Best iteration: 
 
-* 401 trees
-* train-rmse:0.068853
-* test-rmse:0.117671
+* 429 trees
+* train-rmse:0.069101
+* test-rmse:0.117025
 
 ### Train final model and make prediction
 ```{r}
 #train the model using the best iteration found by cross validation
-xgb_mod <- xgb.train(data = dtrain, params=default_param, nrounds=401)
-```
-
-```{r}
+xgb_mod <- xgb.train(data = dtrain, params=default_param, nrounds=429)
 xgb_pred <- exp(predict(xgb_mod, dtest)) #need to reverse the log to the real values
-xgb_submit <- data.frame('Id'=test_Ids, 'SalePrice'=xgb_pred)
-write.csv(xgb_submit, 'xgb.csv', row.names = FALSE)
 ```
 
-Leader board score of 0.12742, slighly worse than Lasso.
 
 ## Averaging predictions
 
-* Lasso 
-        + CV RMSE = 0.1121649
-        + LB RMSE = 0.12336
-* XGBoost
-        + CV RMSE = 0.117671
-        + LB RMSE = 0.12742
+* Lasso CV RMSE = 0.112117
+* XGBoost CV RMSE = 0.117025
         
 ```{r}
-las_xgb_submit <- data.frame('Id'=test_Ids, 'SalePrice'=(lasso_pred+xgb_pred)/2)
+las_xgb_submit <- data.frame('Id'=test_Ids, 'SalePrice'=rowMeans(cbind(lasso_pred,xgb_pred)))
 write.csv(las_xgb_submit, 'lasso_xgb.csv', row.names = FALSE)
 ```
 
-LB score of 0.12195, better than both Lasso and XGB by themselves.
+LB score of 0.12185, better than both Lasso and XGB by themselves.
