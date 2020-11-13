@@ -1007,7 +1007,7 @@ Boruta algorithm is designed to find important features when you have a mix of n
 5. Split all features into three groups, depending whether their importance comes from the head, tail or middle of the distribution: confirmed, rejected and tentative.
 
 Boruta takes a while so placing it in a separate cached chunk.
-```{r cache=TRUE}
+```{r boruta-fit, cache=TRUE}
 boruta.fit <- Boruta(SalePrice~., data = all[!is.na(all$SalePrice),])
 ```
 
@@ -1023,9 +1023,9 @@ Here are top-30 features. Only six of them are categorical, everything else is n
 
 ```{r}
 # Final list of confirmed and tentative features
-# b <- boruta.fit$finalDecision
-# confirmed <- names(b[b == 'Confirmed'])
-# tentative <- names(b[b == 'Tentative'])
+b <- boruta.fit$finalDecision
+confirmed <- names(b[b == 'Confirmed'])
+tentative <- names(b[b == 'Tentative'])
 
 # Mean Z-scores for all features (81:83 are the shadows)
 feat_scores <- sort(apply(boruta.fit$ImpHistory[,1:80],2,mean), decreasing = TRUE)
