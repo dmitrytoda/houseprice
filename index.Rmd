@@ -10,7 +10,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Executive summary
@@ -35,7 +35,6 @@ library(lubridate)
 library(Boruta)
 library(bestNormalize)
 library(xgboost)
-library(e1071)
 set.seed(1101)
 ```
 ```{r}
@@ -1008,7 +1007,7 @@ Boruta algorithm is designed to find important features when you have a mix of n
 5. Split all features into three groups, depending whether their importance comes from the head, tail or middle of the distribution: confirmed, rejected and tentative.
 
 Boruta takes a while so placing it in a separate cached chunk.
-```{r boruta-fit, cache=TRUE}
+```{r cache=TRUE}
 boruta.fit <- Boruta(SalePrice~., data = all[!is.na(all$SalePrice),])
 ```
 
@@ -1024,9 +1023,9 @@ Here are top-30 features. Only six of them are categorical, everything else is n
 
 ```{r}
 # Final list of confirmed and tentative features
-b <- boruta.fit$finalDecision
-confirmed <- names(b[b == 'Confirmed'])
-tentative <- names(b[b == 'Tentative'])
+# b <- boruta.fit$finalDecision
+# confirmed <- names(b[b == 'Confirmed'])
+# tentative <- names(b[b == 'Tentative'])
 
 # Mean Z-scores for all features (81:83 are the shadows)
 feat_scores <- sort(apply(boruta.fit$ImpHistory[,1:80],2,mean), decreasing = TRUE)
@@ -1038,7 +1037,7 @@ ggplot(top30, aes(x=reorder(feature, score), y=score, fill=type)) + geom_bar(sta
 ```{r echo=FALSE} 
 paste('There is a total of', length(confirmed), 'confirmed and', length(tentative), 'tentative features')
 ```
-Whether it is a good idea to discard the features rejected by boruta is another question. For Lasso it leads to increased CV RMSE. For tree-based algorithms like XGBoost still need to check.
+
 
 ## Plotting groups of features {.tabset}
 
@@ -1049,12 +1048,15 @@ In these tabs, I deal only with features from confirmed and tentative lists. It 
 Plotting the distributions of various above ground footage (square / linear) features, plus total rooms above ground as it is highly correlated with GrLivArea. Garage and basement appear below in separate sections. All these variables are right skewed, will have to fix later, e.g. with a log().
 
 ```{r message=FALSE}
+defaultW <- getOption("warn") 
+options(warn = -1)
 s1 <- ggplot(all, aes(x=GrLivArea)) + geom_density() + labs(x='Sq ft living area')
 s2 <- ggplot(all, aes(x=as.factor(TotRmsAbvGrd))) + geom_histogram(stat='count') + labs(x='Rooms above ground')
 s3 <- ggplot(all, aes(x=X1stFlrSF)) + geom_density() + labs(x='Sq ft 1st floor')
 s4 <- ggplot(all, aes(x=X2ndFlrSF)) + geom_density() + labs(x='Sq ft 2nd floor')
 s5 <- ggplot(all[all$LotArea<100000,], aes(x=LotArea)) + geom_density() + labs(x='Lot area')
 s6 <- ggplot(all, aes(x=LotFrontage)) + geom_density() + labs(x='Lot frontage')
+
 
 grid.arrange(s1,s2,s3,s4,s5,s6, nrow=3)
 ```
@@ -1112,11 +1114,13 @@ TotalBsmtSF = BsmtFinSF1 + BsmtFinSF2 + BsmtUnfSF (exactly)
 This is the most important categorical feature, according to boruta.
 
 ```{r}
+
 c1 <- ggplot(all[!is.na(all$SalePrice),], aes(x=MSSubClass, y=SalePrice)) + geom_bar(stat='summary', fun='median', fill='steelblue') + theme(axis.text.x = element_text(angle=45, hjust=1)) + geom_label(stat='count', aes(label=..count.., y=..count..)) + ggtitle('Training set') + geom_hline(yintercept=163000, linetype="dashed", color = "red") #dashed line is median SalePrice
 
 c2 <- ggplot(all, aes(x=MSSubClass)) + geom_histogram(stat='count', fill='gray', bins=30) + theme(axis.text.x = element_text(angle=45, hjust=1)) + geom_label(stat='count', aes(label=..count.., y=..count..)) + ggtitle('All data')
 
 grid.arrange(c1, c2)
+options(warn = defaultW)
 ```
 
 ### Neighborhood
@@ -1228,29 +1232,30 @@ all <- all[-c(524, 1299),]
 
 ## Normalization and encoding
 
-I will split the data frame vertically into two: 
+I will split the data frame vertically into three: 
 
 1. True numeric (square footage, number of bathrooms etc) - need to be centered and scaled
-2. Categorical: remove empty and almost-empty levels, one-hot encode (only for non-ordinals)
-        
+2. Ordinal categories (quality etc) - keep as is
+3. Non-ordinal categories (house type, neighbourhood etc) - remove empty and almost-empty levels, one-hot encode
 
 ```{r}
 # get all predictors of numeric type
-numeric_names <- names(which(sapply(all, is.numeric)))
+numerics <- names(which(sapply(all, is.numeric)))
 
 # manually list ordinals
-ordinal_names <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive')
+ordinals <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive')
 
 # remove ordinals from numerics
-numeric_names <- numeric_names[!(numeric_names %in% c(ordinal_names, 'SalePrice'))]
+numerics <- numerics[!(numerics %in% c(ordinals, 'SalePrice'))]
 
-# get ALL categories (both ordered and unordered)
-categoric_names <- names(all)
-categoric_names <- categoric_names[!(categoric_names %in% c(numeric_names, 'SalePrice'))]
+# get true unordered categories
+categorics <- names(all)
+categorics <- categorics[!(categorics %in% c(numerics, ordinals, 'SalePrice'))]
 
-# go from names to data frame slices
-numerics <- all[,numeric_names]
-categorics <- all[,categoric_names]
+# split data frame
+numerics <- all[,numerics]
+ordinals <- all[,ordinals]
+categorics <- all[,categorics]
 ```
 
 ### True numerics normalization
@@ -1319,19 +1324,16 @@ categorics <- as.data.frame(model.matrix(~.-1, categorics))
 ### Removing empty levels
 
 If some factor level is present only in train set, but not test set, or vice versa, it cannot be used for making predictions. Therefore checking, for train and test set separately, if any dummy variable consists of all zeroes, and removing those.
-By analogy, if some dummy variable (in train and in test set separately) consists of all ones, this does not bring us any useful information either. Some of thise all-one dummy variables may have been created as a side effect of removing almost-empty levels. E.g. Street had 6 x Grvl and 1454 x Pave in the original training set. Now it is all Pave which will become all ones, useless and also forbidding to some algorithms like SVM.
 
 ```{r}
 # train set
 zeroColTrain <- which(colSums(categorics[!is.na(all$SalePrice),])==0)
-oneColTrain <- which(colSums(1-categorics[!is.na(all$SalePrice),])==0)
 
 # test set
 zeroColTest <- which(colSums(categorics[is.na(all$SalePrice),])==0)
-oneColTest <- which(colSums(1-categorics[is.na(all$SalePrice),])==0)
 
 # removing both together
-categorics <- categorics[,-c(zeroColTrain, zeroColTest, oneColTrain, oneColTest)]
+categorics <- categorics[,-c(zeroColTrain, zeroColTest)]
 ```
 
 ## Un-skewing SalePrice
@@ -1357,16 +1359,21 @@ A skew of .12 and almost a straight line, so SalePrice is now normally distribut
 
 ## Re-assembling train and test sets
 
-I have two vertically sliced data frames now. I will combine them vertically, then split back into train and test horizontally.
+I have a bunch of vertically sliced data frames now:
+
+1. numerics, ordinals and categorics contain the original features (preprocessed and encoded)
+2. SalePrice is still a column in all, which has vertically stacked train and test sets (as do all other data frames in pp. 1-2)
+
+I will combine them vertically, then split back into train and test horizontally.
 
 ```{r}
-combined1 <- cbind(numerics, categorics)
+combined1 <- cbind(numerics, ordinals, categorics)
 train1 <- combined1[!is.na(all$SalePrice),]
 test1 <- combined1[is.na(all$SalePrice),]
 dim(train1)
 ```
 
-213 features (SalePrice is separate)
+181 features.
 
 # Modeling
 
@@ -1374,14 +1381,13 @@ dim(train1)
 
 Lasso is just another name for linear regression with L1 regularization. Its cost function is
 ![Lasso cost function](lasso_cost.png)
-
 Here Y is the vector of responses, X is the matrix of predictors, Theta is vector of parameters, and lambda is our only hyperparameter. Caret has a function to tune lambda using cross-validation.
 
 ```{r}
 set.seed(27042018)
 
 # tuning with 5-fold cross-validation, will be reused for later models
-my_control <- trainControl(method='cv', number=10)
+my_control <- trainControl(method='cv', number=5)
 
 # these are values of lambda to try; expand.grid just creates all combinations of alpha and labda, alpha being another hyperparameter that lasso does not use, therefore setting to 1
 lassoGrid <- expand.grid(alpha = 1, lambda = seq(0.001,0.1,by = 0.0005))
@@ -1392,7 +1398,7 @@ lasso_mod$bestTune
 min(lasso_mod$results$RMSE) # using log(SalePrice) just like kaggle
 ```
 
-It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 213 features were used.
+It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 181 features were used.
 
 ```{r}
 lassoVarImp <- varImp(lasso_mod, scale=FALSE) # for GLM, varImp will return all the coefficients (absolute values) in a special object
@@ -1406,10 +1412,10 @@ Make a prediction and submit
 ```{r}
 lasso_pred <- exp(predict(lasso_mod, test1))
 lasso_submit <- data.frame('Id'=test_Ids, 'SalePrice'=lasso_pred)
-write.csv(lasso_submit, 'lasso213.csv', row.names = FALSE)
+write.csv(lasso_submit, 'lasso181.csv', row.names = FALSE)
 ```
 
-Leader board score of 0.12806 with lasso alone.
+Leader board score of 0.12336 with lasso alone.
 
 ## XGBoost
 
@@ -1453,7 +1459,7 @@ dtest <- xgb.DMatrix(data = as.matrix(test1))
 
 # use best hyperparameters from Step 1
 default_param<-list(
-        objective = "reg:squarederror",
+        objective = "reg:linear",
         booster = "gbtree",
         eta=0.05, #default = 0.3
         gamma=0,
@@ -1466,16 +1472,15 @@ default_param<-list(
 
 The next step is to do cross validation to determine the best number of rounds (trees) (for the given set of parameters). 
 
-```{r xgbcv}
-set.seed(11132020)
+```{r}
 xgbcv <- xgb.cv( params = default_param, data = dtrain, nrounds = 1000, nfold = 5, showsd = T, stratified = T, print_every_n = 50, early_stopping_rounds = 10, maximize = F)
 ```
 
 Best iteration: 
 
-* 327 trees
-* train-rmse:0.073617
-* test-rmse:0.118698
+* 401 trees
+* train-rmse:0.068853
+* test-rmse:0.117671
 
 ### Train final model and make prediction
 ```{r}
@@ -1491,40 +1496,18 @@ write.csv(xgb_submit, 'xgb.csv', row.names = FALSE)
 
 Leader board score of 0.12742, slighly worse than Lasso.
 
-## SVM
-
-Training a support vector machine with hyperparameters suggested in <a href="https://www.kaggle.com/couyang/hybrid-svm-benchmark-approach-0-11180-lb-top-2">Hybrid SVM Benchmark Approach [0.11180] LB: Top 2%</a>, that is, cost=3 and everything else default. The author's input data was actually slighly different because of the NA treatment and feature engineering, but let's see if their setup works for me.
-
-Not doing cross-validation, just training final model right away:
-
-```{r}
-svm_mod <- svm(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], cost=3)
-```
-
-Predict and sumbit:
-```{r}
-svm_pred <- exp(predict(svm_mod, test1)) #need to reverse the log to the real values
-svm_submit <- data.frame('Id'=test_Ids, 'SalePrice'=svm_pred)
-write.csv(svm_submit, 'svm.csv', row.names = FALSE)
-```
-
-LB score of 0.14693. Not a good result on its own.
-
 ## Averaging predictions
 
 * Lasso 
         + CV RMSE = 0.1121649
-        + LB RMSE = 0.12806
+        + LB RMSE = 0.12336
 * XGBoost
         + CV RMSE = 0.117671
         + LB RMSE = 0.12742
-* SVM
-        + No CV
-        + LB RMSE = 0.14693
         
 ```{r}
-avg_submit <- data.frame('Id'=test_Ids, 'SalePrice'=rowMeans(cbind(lasso_pred, xgb_pred, svm_pred)))
-write.csv(avg_submit, 'lasso_xgb_svm.csv', row.names = FALSE)
+las_xgb_submit <- data.frame('Id'=test_Ids, 'SalePrice'=(lasso_pred+xgb_pred)/2)
+write.csv(las_xgb_submit, 'lasso_xgb.csv', row.names = FALSE)
 ```
 
 LB score of 0.12195, better than both Lasso and XGB by themselves.
