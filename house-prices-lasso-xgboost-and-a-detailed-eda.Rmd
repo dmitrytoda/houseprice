@@ -9,7 +9,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
 ```
 #Executive Summary
 
@@ -55,8 +55,8 @@ library(xgboost)
 Below, I am reading the csv's as dataframes into R.
 
 ```{r}
-train <- read.csv("../input/train.csv", stringsAsFactors = F)
-test <- read.csv("../input/test.csv", stringsAsFactors = F)
+train <- read.csv("train.csv", stringsAsFactors = F)
+test <- read.csv("test.csv", stringsAsFactors = F)
 ```
 
 ##Data size and structure
@@ -1841,11 +1841,19 @@ cat('There are', length(DFnumeric), 'numeric variables, and', length(DFfactors),
 Skewness is a measure of the symmetry in a distribution.  A symmetrical dataset will have a skewness equal to 0.  So, a normal distribution will have a skewness of 0. Skewness essentially measures the relative size of the two tails. As a rule of thumb, skewness should be between -1 and 1. In this range, data are considered fairly symmetrical. In order to fix the skewness, I am taking the log for all numeric predictors with an absolute skew greater than 0.8 (actually: log+1, to avoid division by zero issues).
 
 ```{r}
+skewed <- sapply(DFnumeric, function(x) abs(skew(x))>.5)
+skewed <- names(skewed[skewed])
+skewed
+
 for(i in 1:ncol(DFnumeric)){
         if (abs(skew(DFnumeric[,i]))>0.8){
                 DFnumeric[,i] <- log(DFnumeric[,i] +1)
         }
 }
+
+skewed <- sapply(DFnumeric, function(x) abs(skew(x))>.5)
+skewed <- names(skewed[skewed])
+sapply(DFnumeric[,skewed], skew)
 ```
 
 **Normalizing the data**
@@ -2056,7 +2064,11 @@ mat <- xgb.importance (feature_names = colnames(train1),model = xgb_mod)
 xgb.ggplot.importance(importance_matrix = mat[1:20], rel_to_first = TRUE)
 ```
 
-##Averaging predictions
+## SVM
+
+Training a SVM with hyperparameters 
+
+## Averaging predictions
 
 Since the lasso and XGBoost algorithms are very different, averaging predictions likely improves the scores. As the lasso model does better regarding the cross validated RMSE score (0.1121 versus 0.1162), I am weigting the lasso model double.
 
