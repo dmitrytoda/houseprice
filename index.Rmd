@@ -9,7 +9,7 @@ output:
         
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, warning=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
@@ -35,6 +35,7 @@ library(lubridate)
 library(Boruta)
 library(bestNormalize)
 library(xgboost)
+library(e1071)
 set.seed(1101)
 ```
 ```{r}
@@ -1488,15 +1489,38 @@ xgb_mod <- xgb.train(data = dtrain, params=default_param, nrounds=429)
 xgb_pred <- exp(predict(xgb_mod, dtest)) #need to reverse the log to the real values
 ```
 
+## SVM
+
+Support Vector Machines were developed for classification problems, but they can be used for regression as well. There are two hyperparameters to tune with caret, sigma and C. Kernel can be set to Gaussian radial.
+
+```{r svm-tune, cache=TRUE}
+svm_grid <- expand.grid(
+    sigma = 10^seq(-5, -2, length.out = 10),
+    C = 2^seq(0, 7, length.out = 10))
+svm_caret <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='svmRadial', trControl= my_control, tuneGrid=svm_grid)
+svm_caret$bestTune
+min(svm_caret$results$RMSE)
+```
+
+Caret tuning produces best RMSE of 0.1139437, when sigma=0.0001 and C=128.
+
+```{r}
+# gamma is same as sigma, and cost same as C
+svm_mod <- svm(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], kernel =
+"radial", gamma=0.0001, cost=128)
+
+svm_pred <- exp(predict(svm_mod, test1))
+```
 
 ## Averaging predictions
 
 * Lasso CV RMSE = 0.112117
 * XGBoost CV RMSE = 0.117025
+* SVM CV RMSE = 0.1139437
         
 ```{r}
-las_xgb_submit <- data.frame('Id'=test_Ids, 'SalePrice'=rowMeans(cbind(lasso_pred,xgb_pred)))
-write.csv(las_xgb_submit, 'lasso_xgb.csv', row.names = FALSE)
+las_xgb_svm <- data.frame('Id'=test_Ids, 'SalePrice'=rowMeans(cbind(lasso_pred,xgb_pred, svm_pred)))
+write.csv(las_xgb_svm, 'lasso_xgb_svm.csv', row.names = FALSE)
 ```
 
-LB score of 0.12185, better than both Lasso and XGB by themselves.
+LB score of 0.12073.
