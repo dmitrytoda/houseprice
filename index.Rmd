@@ -1246,7 +1246,7 @@ I will split the data frame vertically into two:
 numerics <- names(which(sapply(all, is.numeric)))
 
 # manually list ordinals
-ordinal_names <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive')
+ordinal_names <- c('LotShape', 'LandSlope', 'OverallQual', 'OverallCond', 'ExterQual', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'HeatingQC', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageFinish', 'GarageQual', 'PavedDrive', 'PoolQC')
 
 # remove ordinals from numerics
 numerics <- numerics[!(numerics %in% c(ordinal_names, 'SalePrice'))]
@@ -1270,7 +1270,7 @@ skewed <- sapply(numerics, function(x) abs(skew(x))>.5)
 skewed <- names(skewed[skewed])
 skewed
 ```
-29 skewed features. Apply Box-Cox transformation to these features and check if it helped.
+28 skewed features. Apply Box-Cox transformation to these features and check if it helped.
 ```{r}
 for (i in skewed){
         numerics[,i] <- bestNormalize::boxcox(numerics[,i]+1)$x.t
@@ -1279,7 +1279,7 @@ skewed <- sapply(numerics, function(x) abs(skew(x))>.5)
 skewed <- names(skewed[skewed])
 sapply(numerics[,skewed], skew)
 ```
-There now 13 features with |skew|>.5 instead of 29. <span style="color: red;">This can definitely be improved</span>, but let's see, maybe it will work good enough like this.
+There now 12 features with |skew|>.5 instead of 28. <span style="color: red;">This can definitely be improved</span>, but let's see, maybe it will work good enough like this.
 
 **Center and scale**
 

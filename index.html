@@ -444,7 +444,8 @@ summary {
 <li><a href="#find-number-of-trees"><span class="toc-section-number">6.2.2</span> Find number of trees</a></li>
 <li><a href="#train-final-model-and-make-prediction"><span class="toc-section-number">6.2.3</span> Train final model and make prediction</a></li>
 </ul></li>
-<li><a href="#averaging-predictions"><span class="toc-section-number">6.3</span> Averaging predictions</a></li>
+<li><a href="#svm"><span class="toc-section-number">6.3</span> SVM</a></li>
+<li><a href="#averaging-predictions"><span class="toc-section-number">6.4</span> Averaging predictions</a></li>
 </ul></li>
 </ul>
 </div>
@@ -471,6 +472,7 @@ library(lubridate)
 library(Boruta)
 library(bestNormalize)
 library(xgboost)
+library(e1071)
 set.seed(1101)</code></pre>
 <pre class="r"><code>train &lt;- read.csv(&#39;train.csv&#39;, stringsAsFactors = FALSE)
 test &lt;- read.csv(&#39;test.csv&#39;, stringsAsFactors = FALSE)</code></pre>
@@ -1510,7 +1512,7 @@ dim(all)</code></pre>
 numerics &lt;- names(which(sapply(all, is.numeric)))
 
 # manually list ordinals
-ordinal_names &lt;- c(&#39;LotShape&#39;, &#39;LandSlope&#39;, &#39;OverallQual&#39;, &#39;OverallCond&#39;, &#39;ExterQual&#39;, &#39;BsmtQual&#39;, &#39;BsmtCond&#39;, &#39;BsmtExposure&#39;, &#39;BsmtFinType1&#39;, &#39;BsmtFinType2&#39;, &#39;HeatingQC&#39;, &#39;KitchenQual&#39;, &#39;Functional&#39;, &#39;FireplaceQu&#39;, &#39;GarageFinish&#39;, &#39;GarageQual&#39;, &#39;PavedDrive&#39;)
+ordinal_names &lt;- c(&#39;LotShape&#39;, &#39;LandSlope&#39;, &#39;OverallQual&#39;, &#39;OverallCond&#39;, &#39;ExterQual&#39;, &#39;BsmtQual&#39;, &#39;BsmtCond&#39;, &#39;BsmtExposure&#39;, &#39;BsmtFinType1&#39;, &#39;BsmtFinType2&#39;, &#39;HeatingQC&#39;, &#39;KitchenQual&#39;, &#39;Functional&#39;, &#39;FireplaceQu&#39;, &#39;GarageFinish&#39;, &#39;GarageQual&#39;, &#39;PavedDrive&#39;, &#39;PoolQC&#39;)
 
 # remove ordinals from numerics
 numerics &lt;- numerics[!(numerics %in% c(ordinal_names, &#39;SalePrice&#39;))]
@@ -1534,10 +1536,9 @@ skewed</code></pre>
 ##  [9] &quot;X2ndFlrSF&quot;     &quot;LowQualFinSF&quot;  &quot;GrLivArea&quot;     &quot;BsmtFullBath&quot; 
 ## [13] &quot;BsmtHalfBath&quot;  &quot;HalfBath&quot;      &quot;KitchenAbvGr&quot;  &quot;TotRmsAbvGrd&quot; 
 ## [17] &quot;Fireplaces&quot;    &quot;WoodDeckSF&quot;    &quot;OpenPorchSF&quot;   &quot;EnclosedPorch&quot;
-## [21] &quot;X3SsnPorch&quot;    &quot;ScreenPorch&quot;   &quot;PoolArea&quot;      &quot;PoolQC&quot;       
-## [25] &quot;MiscVal&quot;       &quot;Age&quot;           &quot;IsNew&quot;         &quot;NeighBin&quot;     
-## [29] &quot;TotalSF&quot;</code></pre>
-<p>29 skewed features. Apply Box-Cox transformation to these features and check if it helped.</p>
+## [21] &quot;X3SsnPorch&quot;    &quot;ScreenPorch&quot;   &quot;PoolArea&quot;      &quot;MiscVal&quot;      
+## [25] &quot;Age&quot;           &quot;IsNew&quot;         &quot;NeighBin&quot;      &quot;TotalSF&quot;</code></pre>
+<p>28 skewed features. Apply Box-Cox transformation to these features and check if it helped.</p>
 <pre class="r"><code>for (i in skewed){
         numerics[,i] &lt;- bestNormalize::boxcox(numerics[,i]+1)$x.t
 }
@@ -1548,9 +1549,9 @@ sapply(numerics[,skewed], skew)</code></pre>
 ##    -0.5729272     2.3532777     8.3588582     3.7236042     0.5472535 
 ##  KitchenAbvGr EnclosedPorch    X3SsnPorch   ScreenPorch      PoolArea 
 ##     0.9730641     1.8813595     8.7052685     2.9124294    15.4868458 
-##        PoolQC       MiscVal         IsNew 
-##    15.6842581     5.0330200     4.7544848</code></pre>
-<p>There now 13 features with |skew|&gt;.5 instead of 29. <span style="color: red;">This can definitely be improved</span>, but let’s see, maybe it will work good enough like this.</p>
+##       MiscVal         IsNew 
+##     5.0330200     4.7544848</code></pre>
+<p>There now 12 features with |skew|&gt;.5 instead of 28. <span style="color: red;">This can definitely be improved</span>, but let’s see, maybe it will work good enough like this.</p>
 <p><strong>Center and scale</strong></p>
 <p>For many machine learning algorithms to run properly, the features should have a mean of zero and similar scale. Usually they are scaled to be either from -1 to 1, or to have a variance of 1. preProcess function of caret package by default goes with the latter.</p>
 <pre class="r"><code>preproc &lt;- preProcess(numerics, method=c(&#39;center&#39;, &#39;scale&#39;))
@@ -1708,7 +1709,7 @@ lasso_mod$bestTune</code></pre>
 <pre><code>##   alpha lambda
 ## 3     1  0.002</code></pre>
 <pre class="r"><code>min(lasso_mod$results$RMSE) # using log(SalePrice) just like kaggle</code></pre>
-<pre><code>## [1] 0.11217</code></pre>
+<pre><code>## [1] 0.1122253</code></pre>
 <p>It actually worked very fast. Lasso works great for when you have plenty of predictors by setting regression coefficients for many of them to zero. I want to see how many of the 179 features were used.</p>
 <pre class="r"><code>lassoVarImp &lt;- varImp(lasso_mod, scale=FALSE) # for GLM, varImp will return all the coefficients (absolute values) in a special object
 lassoImportance &lt;- lassoVarImp$importance # same coefficients but as a simple data frame with one column
@@ -1796,15 +1797,35 @@ xgb_mod &lt;- xgb.train(data = dtrain, params=default_param, nrounds=429)
 xgb_pred &lt;- exp(predict(xgb_mod, dtest)) #need to reverse the log to the real values</code></pre>
 </div>
 </div>
+<div id="svm" class="section level2">
+<h2><span class="header-section-number">6.3</span> SVM</h2>
+<p>Support Vector Machines were developed for classification problems, but they can be used for regression as well. There are two hyperparameters to tune with caret, sigma and C. Kernel can be set to Gaussian radial.</p>
+<pre class="r"><code>svm_grid &lt;- expand.grid(
+    sigma = 10^seq(-5, -2, length.out = 10),
+    C = 2^seq(0, 7, length.out = 10))
+svm_caret &lt;- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method=&#39;svmRadial&#39;, trControl= my_control, tuneGrid=svm_grid)
+svm_caret$bestTune</code></pre>
+<pre><code>##     sigma   C
+## 40 0.0001 128</code></pre>
+<pre class="r"><code>min(svm_caret$results$RMSE)</code></pre>
+<pre><code>## [1] 0.1139656</code></pre>
+<p>Caret tuning produces best RMSE of 0.1139437, when sigma=0.0001 and C=128.</p>
+<pre class="r"><code># gamma is same as sigma, and cost same as C
+svm_mod &lt;- svm(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], kernel =
+&quot;radial&quot;, gamma=0.0001, cost=128)
+
+svm_pred &lt;- exp(predict(svm_mod, test1))</code></pre>
+</div>
 <div id="averaging-predictions" class="section level2">
-<h2><span class="header-section-number">6.3</span> Averaging predictions</h2>
+<h2><span class="header-section-number">6.4</span> Averaging predictions</h2>
 <ul>
 <li>Lasso CV RMSE = 0.112117</li>
 <li>XGBoost CV RMSE = 0.117025</li>
+<li>SVM CV RMSE = 0.1139437</li>
 </ul>
-<pre class="r"><code>las_xgb_submit &lt;- data.frame(&#39;Id&#39;=test_Ids, &#39;SalePrice&#39;=rowMeans(cbind(lasso_pred,xgb_pred)))
-write.csv(las_xgb_submit, &#39;lasso_xgb.csv&#39;, row.names = FALSE)</code></pre>
-<p>LB score of 0.12185, better than both Lasso and XGB by themselves.</p>
+<pre class="r"><code>las_xgb_svm &lt;- data.frame(&#39;Id&#39;=test_Ids, &#39;SalePrice&#39;=rowMeans(cbind(lasso_pred,xgb_pred, svm_pred)))
+write.csv(las_xgb_svm, &#39;lasso_xgb_svm.csv&#39;, row.names = FALSE)</code></pre>
+<p>LB score of 0.12073.</p>
 </div>
 </div>
 
